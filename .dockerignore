@@ -11,4 +11,5 @@ data
 tests
 docs
 *.md
+!README.md
 .env*
