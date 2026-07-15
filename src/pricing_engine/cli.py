@@ -1,0 +1,178 @@
+"""Operational command-line interface for local workflows and scheduled jobs."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import typer
+
+from pricing_engine.application.retraining_service import RetrainingPipeline
+from pricing_engine.application.training_service import TrainDemandModel
+from pricing_engine.config import get_settings
+from pricing_engine.infrastructure.demo_data import generate_demo_observations
+from pricing_engine.infrastructure.features import PricingFeatureFactory
+from pricing_engine.infrastructure.model_registry import LocalModelBundleStore, MLflowModelRegistry
+from pricing_engine.infrastructure.monitoring import build_drift_report
+
+app = typer.Typer(
+    name="pricing-engine",
+    help="Dynamic pricing training, registry, and monitoring operations.",
+    no_args_is_help=True,
+)
+
+
+def _read_frame(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise typer.BadParameter(f"Input file does not exist: {path}")
+    if path.suffix.lower() == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path)
+    raise typer.BadParameter("Input must be a .csv or .parquet file.")
+
+
+def _write_frame(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix.lower() == ".parquet":
+        frame.to_parquet(path, index=False)
+    elif path.suffix.lower() == ".csv":
+        frame.to_csv(path, index=False)
+    else:
+        raise typer.BadParameter("Output must be a .csv or .parquet file.")
+
+
+@app.command("generate-demo-data")
+def generate_demo_data(
+    output: Path = typer.Option(..., help="Destination CSV or Parquet file."),
+    properties: int = typer.Option(12, min=1, max=500),
+    decision_days: int = typer.Option(180, min=10, max=5_000),
+    seed: int = typer.Option(42),
+) -> None:
+    """Create deterministic non-production data for an end-to-end demonstration."""
+
+    frame = generate_demo_observations(
+        properties=properties,
+        decision_days=decision_days,
+        seed=seed,
+    )
+    _write_frame(frame, output)
+    typer.echo(
+        json.dumps(
+            {"output": str(output), "rows": len(frame), "warning": "synthetic demo data"},
+            indent=2,
+        )
+    )
+
+
+@app.command()
+def train(
+    input: Path = typer.Option(..., help="Validated historical CSV or Parquet observations."),
+    output: Path = typer.Option(
+        Path("artifacts/local-model"),
+        help="Local bundle directory for API development.",
+    ),
+) -> None:
+    """Train locally, evaluate chronologically, and persist a portable bundle."""
+
+    outcome = TrainDemandModel().execute(_read_frame(input))
+    bundle = LocalModelBundleStore().save_local(outcome.model, output)
+    typer.echo(
+        json.dumps(
+            {
+                "bundle": str(bundle),
+                "model_version": outcome.model.version,
+                "metrics": outcome.metrics.as_dict(),
+                "partitions": {
+                    "train": outcome.train_rows,
+                    "calibration": outcome.calibration_rows,
+                    "test": outcome.test_rows,
+                },
+            },
+            indent=2,
+        )
+    )
+
+
+@app.command()
+def retrain(
+    input: Path = typer.Option(..., help="Validated historical CSV or Parquet observations."),
+    experiment_name: str = typer.Option("pricing-demand"),
+    registered_model_name: str = typer.Option("pricing-demand"),
+) -> None:
+    """Train and register a gated candidate. This never changes the champion alias."""
+
+    settings = get_settings()
+    registry = MLflowModelRegistry(
+        tracking_uri=settings.mlflow_tracking_uri,
+        experiment_name=experiment_name,
+        registered_model_name=registered_model_name,
+    )
+    result = RetrainingPipeline(trainer=TrainDemandModel(), registry=registry).execute(
+        _read_frame(input)
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "candidate": {
+                    "model_name": result.registered_model.model_name,
+                    "model_version": result.registered_model.model_version,
+                    "model_uri": result.registered_model.model_uri,
+                    "run_id": result.registered_model.run_id,
+                },
+                "metrics": result.outcome.metrics.as_dict(),
+                "dataset_fingerprint": result.dataset_fingerprint,
+                "next_step": "Review the candidate, then run promote explicitly.",
+            },
+            indent=2,
+        )
+    )
+
+
+@app.command()
+def promote(
+    version: str = typer.Option(..., help="MLflow registered model version to promote."),
+    approved_by: str = typer.Option(..., help="Named human approver recorded in MLflow."),
+    registered_model_name: str = typer.Option("pricing-demand"),
+) -> None:
+    """Set the MLflow champion alias after an explicit human approval."""
+
+    settings = get_settings()
+    MLflowModelRegistry(
+        tracking_uri=settings.mlflow_tracking_uri,
+        registered_model_name=registered_model_name,
+    ).promote(version=version, approved_by=approved_by)
+    typer.echo(json.dumps({"promoted_version": version, "alias": "champion"}, indent=2))
+
+
+@app.command()
+def drift(
+    reference: Path = typer.Option(..., help="Baseline historical observations."),
+    current: Path = typer.Option(..., help="Recent historical observations."),
+    threshold: float = typer.Option(0.20, min=0.01, max=1.0),
+) -> None:
+    """Report population stability drift over the immutable feature contract."""
+
+    factory = PricingFeatureFactory()
+    reference_features = factory.build_training_features(_read_frame(reference))
+    current_features = factory.build_training_features(_read_frame(current))
+    report = build_drift_report(reference_features, current_features, threshold=threshold)
+    typer.echo(
+        json.dumps(
+            {
+                "threshold": threshold,
+                "requires_retraining_review": report.requires_retraining_review,
+                "features": [
+                    {
+                        "feature": item.feature,
+                        "psi": round(item.population_stability_index, 5),
+                        "reference_missing_rate": item.reference_missing_rate,
+                        "current_missing_rate": item.current_missing_rate,
+                    }
+                    for item in report.features
+                ],
+            },
+            indent=2,
+        )
+    )

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# Runtime state and artifacts
+artifacts/
+mlruns/
+data/raw/
+data/processed/
+data/demo/
+models/
+*.joblib
+*.pickle
+
+# Environment and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
