@@ -35,7 +35,7 @@ dependencies = [
   "mlflow>=3.0,<4.0",
   "pandera>=0.22,<1.0",
   "typer>=0.15,<1.0",
-  "structlog>=24.4,<26.0",
+  "structlog>=24.4,<27.0",
   "prometheus-client>=0.21,<1.0",
   "joblib>=1.4,<2.0",
 ]
