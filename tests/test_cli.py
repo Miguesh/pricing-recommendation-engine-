@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 import pricing_engine.cli as cli
+from pricing_engine.application.ports import RegisteredModel
 from pricing_engine.config import Settings
-from pricing_engine.infrastructure.model_registry import RegisteredModel
 
 runner = CliRunner()
 
@@ -56,7 +57,7 @@ def test_train_command_persists_bundle(
             assert len(frame) == len(demo_observations)
             return training_outcome
 
-    monkeypatch.setattr(cli, "TrainDemandModel", StubTrainer)
+    monkeypatch.setattr(cli, "_build_training_service", lambda: StubTrainer())
     result = runner.invoke(
         cli.app,
         ["train", "--input", str(input_path), "--output", str(output_path)],
@@ -82,6 +83,9 @@ def test_registry_commands_are_explicit_and_do_not_require_network(
 
         def promote(self, *, version: str, approved_by: str) -> None:
             events["promotion"] = (version, approved_by)
+
+        def rollback(self, *, version: str, approved_by: str, reason: str) -> None:
+            events["rollback"] = (version, approved_by, reason)
 
     class FakePipeline:
         def __init__(self, **kwargs):
@@ -111,8 +115,29 @@ def test_registry_commands_are_explicit_and_do_not_require_network(
         cli.app,
         ["promote", "--version", "5", "--approved-by", "Miguel"],
     )
+    rollback_result = runner.invoke(
+        cli.app,
+        [
+            "rollback",
+            "--version",
+            "4",
+            "--approved-by",
+            "Miguel",
+            "--reason",
+            "Restore stable model after detected regression.",
+        ],
+    )
 
     assert retrain_result.exit_code == 0, retrain_result.output
     assert promote_result.exit_code == 0, promote_result.output
+    assert rollback_result.exit_code == 0, rollback_result.output
+    assert json.loads(retrain_result.stdout)["candidate"]["model_version"] == "5"
+    assert json.loads(promote_result.stdout) == {"promoted_version": "5", "alias": "champion"}
+    assert json.loads(rollback_result.stdout)["rolled_back_to_version"] == "4"
     assert events["retrain_rows"] == len(demo_observations)
     assert events["promotion"] == ("5", "Miguel")
+    assert events["rollback"] == (
+        "4",
+        "Miguel",
+        "Restore stable model after detected regression.",
+    )

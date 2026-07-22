@@ -1,5 +1,8 @@
+name: pricing-recommendation-engine
+
 services:
   api:
+    image: pricing-recommendation-engine-api:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,17 +10,28 @@ services:
       - path: .env
         required: false
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      PRICING_MLFLOW_TRACKING_URI: http://mlflow:5000
+      PRICING_DEPENDENCY_PROJECT_PATH: /app/model-contract
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       mlflow:
         condition: service_healthy
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24
     environment:
       POSTGRES_DB: mlflow
       POSTGRES_USER: mlflow
@@ -32,14 +46,14 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -50,7 +64,7 @@ services:
     restart: unless-stopped
 
   create-bucket:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
     depends_on:
       minio:
         condition: service_healthy
@@ -58,33 +72,62 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 minio minio-secret &&
       mc mb --ignore-existing local/mlflow"
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   mlflow:
+    image: pricing-recommendation-engine-mlflow:local
     build:
       context: .
       dockerfile: docker/mlflow/Dockerfile
     command: >
       mlflow server
       --backend-store-uri postgresql://mlflow:mlflow@postgres:5432/mlflow
-      --default-artifact-root s3://mlflow/
+      --artifacts-destination s3://mlflow/
+      --serve-artifacts
       --host 0.0.0.0
       --port 5000
+      --workers 2
+      --allowed-hosts mlflow:5000,localhost:*,127.0.0.1:*
     environment:
       AWS_ACCESS_KEY_ID: minio
       AWS_SECRET_ACCESS_KEY: minio-secret
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     depends_on:
       postgres:
         condition: service_healthy
       create-bucket:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)",
+        ]
       interval: 10s
       timeout: 5s
       retries: 15
+      start_period: 20s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
     restart: unless-stopped
 
 volumes:

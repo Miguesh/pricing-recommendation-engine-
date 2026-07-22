@@ -32,10 +32,9 @@ class PricingPolicy:
     ) -> tuple[Decimal, ...]:
         minimum = constraints.min_price
         maximum = constraints.max_price
-        if constraints.max_price_change_pct is not None:
-            change = constraints.max_price_change_pct
-            minimum = max(minimum, current_price * (Decimal("1") - change))
-            maximum = min(maximum, current_price * (Decimal("1") + change))
+        change = constraints.max_price_change_pct
+        minimum = max(minimum, current_price * (Decimal("1") - change))
+        maximum = min(maximum, current_price * (Decimal("1") + change))
 
         increment = constraints.price_increment
         first = (minimum / increment).to_integral_value(rounding=ROUND_CEILING) * increment
