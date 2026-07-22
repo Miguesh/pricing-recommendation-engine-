@@ -1,0 +1,3 @@
+# Keep uv operations hermetic to the repository in local development and CI.
+# This also lets MLflow export the locked runtime without relying on a user cache.
+cache-dir = ".uv-cache"

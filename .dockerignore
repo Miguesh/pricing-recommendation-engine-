@@ -1,6 +1,9 @@
 .git
 .github
 .venv
+.uv-cache
+.pytest-tmp
+dist
 __pycache__
 .pytest_cache
 .mypy_cache

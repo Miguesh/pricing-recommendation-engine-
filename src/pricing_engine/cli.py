@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
+from contextlib import redirect_stdout
+from math import isfinite
 from pathlib import Path
 
 import pandas as pd
@@ -11,16 +14,41 @@ import typer
 from pricing_engine.application.retraining_service import RetrainingPipeline
 from pricing_engine.application.training_service import TrainDemandModel
 from pricing_engine.config import get_settings
+from pricing_engine.infrastructure.data_contracts import validate_training_frame
 from pricing_engine.infrastructure.demo_data import generate_demo_observations
 from pricing_engine.infrastructure.features import PricingFeatureFactory
 from pricing_engine.infrastructure.model_registry import LocalModelBundleStore, MLflowModelRegistry
 from pricing_engine.infrastructure.monitoring import build_drift_report
+from pricing_engine.infrastructure.training import (
+    LightGBMDemandModelTrainer,
+    PanderaTrainingDataValidator,
+)
 
 app = typer.Typer(
     name="pricing-engine",
     help="Dynamic pricing training, registry, and monitoring operations.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def configure_console_encoding() -> None:
+    """Make third-party CLI output portable across Windows code pages."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def _build_training_service() -> TrainDemandModel:
+    """Compose application training ports at the CLI boundary."""
+
+    return TrainDemandModel(
+        validator=PanderaTrainingDataValidator(),
+        feature_factory=PricingFeatureFactory(),
+        model_trainer=LightGBMDemandModelTrainer(),
+    )
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
@@ -76,7 +104,7 @@ def train(
 ) -> None:
     """Train locally, evaluate chronologically, and persist a portable bundle."""
 
-    outcome = TrainDemandModel().execute(_read_frame(input))
+    outcome = _build_training_service().execute(_read_frame(input))
     bundle = LocalModelBundleStore().save_local(outcome.model, output)
     typer.echo(
         json.dumps(
@@ -88,6 +116,8 @@ def train(
                     "train": outcome.train_rows,
                     "calibration": outcome.calibration_rows,
                     "test": outcome.test_rows,
+                    "purged_train": outcome.purged_train_rows,
+                    "purged_calibration": outcome.purged_calibration_rows,
                 },
             },
             indent=2,
@@ -108,10 +138,13 @@ def retrain(
         tracking_uri=settings.mlflow_tracking_uri,
         experiment_name=experiment_name,
         registered_model_name=registered_model_name,
+        dependency_project_path=settings.dependency_project_path,
     )
-    result = RetrainingPipeline(trainer=TrainDemandModel(), registry=registry).execute(
-        _read_frame(input)
-    )
+    with redirect_stdout(sys.stderr):
+        result = RetrainingPipeline(
+            trainer=_build_training_service(),
+            registry=registry,
+        ).execute(_read_frame(input))
     typer.echo(
         json.dumps(
             {
@@ -122,7 +155,24 @@ def retrain(
                     "run_id": result.registered_model.run_id,
                 },
                 "metrics": result.outcome.metrics.as_dict(),
+                "partitions": {
+                    "train": result.outcome.train_rows,
+                    "calibration": result.outcome.calibration_rows,
+                    "test": result.outcome.test_rows,
+                    "purged_train": result.outcome.purged_train_rows,
+                    "purged_calibration": result.outcome.purged_calibration_rows,
+                },
                 "dataset_fingerprint": result.dataset_fingerprint,
+                "compared_with_champion": result.outcome.benchmark_metrics is not None,
+                "benchmark": {
+                    "status": result.outcome.benchmark_status,
+                    "model_version": result.outcome.benchmark_model_version,
+                    "current_holdout_metrics": (
+                        result.outcome.benchmark_metrics.as_dict()
+                        if result.outcome.benchmark_metrics is not None
+                        else None
+                    ),
+                },
                 "next_step": "Review the candidate, then run promote explicitly.",
             },
             indent=2,
@@ -139,11 +189,36 @@ def promote(
     """Set the MLflow champion alias after an explicit human approval."""
 
     settings = get_settings()
-    MLflowModelRegistry(
-        tracking_uri=settings.mlflow_tracking_uri,
-        registered_model_name=registered_model_name,
-    ).promote(version=version, approved_by=approved_by)
+    with redirect_stdout(sys.stderr):
+        MLflowModelRegistry(
+            tracking_uri=settings.mlflow_tracking_uri,
+            registered_model_name=registered_model_name,
+        ).promote(version=version, approved_by=approved_by)
     typer.echo(json.dumps({"promoted_version": version, "alias": "champion"}, indent=2))
+
+
+@app.command()
+def rollback(
+    version: str = typer.Option(..., help="Superseded MLflow version to restore."),
+    approved_by: str = typer.Option(..., help="Named human approver recorded in MLflow."),
+    reason: str = typer.Option(..., help="Auditable operational reason for the rollback."),
+    registered_model_name: str = typer.Option("pricing-demand"),
+) -> None:
+    """Restore a superseded model version without bypassing governance checks."""
+
+    settings = get_settings()
+    with redirect_stdout(sys.stderr):
+        MLflowModelRegistry(
+            tracking_uri=settings.mlflow_tracking_uri,
+            registered_model_name=registered_model_name,
+            dependency_project_path=settings.dependency_project_path,
+        ).rollback(version=version, approved_by=approved_by, reason=reason)
+    typer.echo(
+        json.dumps(
+            {"rolled_back_to_version": version, "alias": "champion", "reason": reason},
+            indent=2,
+        )
+    )
 
 
 @app.command()
@@ -155,8 +230,12 @@ def drift(
     """Report population stability drift over the immutable feature contract."""
 
     factory = PricingFeatureFactory()
-    reference_features = factory.build_training_features(_read_frame(reference))
-    current_features = factory.build_training_features(_read_frame(current))
+    reference_features = factory.build_training_features(
+        validate_training_frame(_read_frame(reference))
+    )
+    current_features = factory.build_training_features(
+        validate_training_frame(_read_frame(current))
+    )
     report = build_drift_report(reference_features, current_features, threshold=threshold)
     typer.echo(
         json.dumps(
@@ -166,7 +245,12 @@ def drift(
                 "features": [
                     {
                         "feature": item.feature,
-                        "psi": round(item.population_stability_index, 5),
+                        "status": item.status.value,
+                        "psi": (
+                            round(item.population_stability_index, 5)
+                            if isfinite(item.population_stability_index)
+                            else None
+                        ),
                         "reference_missing_rate": item.reference_missing_rate,
                         "current_missing_rate": item.current_missing_rate,
                     }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from pricing_engine.application.ports import DemandPredictor, FeatureFactory
-from pricing_engine.config import Settings
+from pricing_engine.domain.exceptions import InvalidPricingRequestError
 from pricing_engine.domain.models import PricingContext, PricingRecommendation
 from pricing_engine.domain.policies import CandidatePrice, PricingPolicy
 
@@ -19,18 +19,28 @@ class RecommendPrice:
         predictor: DemandPredictor,
         feature_factory: FeatureFactory,
         pricing_policy: PricingPolicy,
-        settings: Settings,
+        maximum_candidates: int,
     ) -> None:
         self._predictor = predictor
         self._feature_factory = feature_factory
         self._pricing_policy = pricing_policy
-        self._settings = settings
+        self._maximum_candidates = maximum_candidates
 
     def execute(self, context: PricingContext) -> PricingRecommendation:
+        if context.tenant_id not in self._predictor.tenant_ids:
+            raise InvalidPricingRequestError(
+                "The approved model is not scoped to the requested tenant. "
+                "Train and promote a model whose governed tenant scope includes this tenant."
+            )
+        if context.currency != self._predictor.currency:
+            raise InvalidPricingRequestError(
+                f"Model currency is {self._predictor.currency}; received {context.currency}. "
+                "Convert monetary inputs before requesting a recommendation."
+            )
         prices = self._pricing_policy.feasible_prices(
             current_price=context.current_price,
             constraints=context.constraints,
-            maximum_candidates=self._settings.recommendation_max_candidates,
+            maximum_candidates=self._maximum_candidates,
         )
         features = self._feature_factory.for_candidate_prices(
             context, [float(price) for price in prices]
@@ -53,9 +63,12 @@ class RecommendPrice:
             100 * (0.65 * uncertainty_score + 0.35 * selected.demand.in_distribution_score),
             1,
         )
-        constraints_applied = ["min_price", "max_price", "price_increment"]
-        if context.constraints.max_price_change_pct is not None:
-            constraints_applied.append("max_price_change_pct")
+        constraints_applied = [
+            "min_price",
+            "max_price",
+            "price_increment",
+            "max_price_change_pct",
+        ]
         if context.constraints.min_expected_occupancy is not None:
             constraints_applied.append("min_expected_occupancy")
 

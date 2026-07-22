@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from pricing_engine.application.recommendation_service import RecommendPrice
 from pricing_engine.config import Settings
 from pricing_engine.domain.exceptions import ModelUnavailableError
@@ -23,6 +25,9 @@ class ApplicationContainer:
         predictor: QuantileLightGBMDemandModel | None = None,
     ) -> None:
         self.settings = settings
+        if predictor is not None:
+            self._validate_predictor_contract(predictor)
+            self._warm_predictor(predictor)
         self._predictor = predictor
         self._service: RecommendPrice | None = (
             self._build_service(predictor) if predictor is not None else None
@@ -56,16 +61,74 @@ class ApplicationContainer:
         if Path(uri).exists():
             predictor = LocalModelBundleStore().load(uri)
         else:
-            predictor = MLflowModelRegistry(tracking_uri=self.settings.mlflow_tracking_uri).load(
-                uri
-            )
+            predictor = MLflowModelRegistry(
+                tracking_uri=self.settings.mlflow_tracking_uri,
+                dependency_project_path=self.settings.dependency_project_path,
+            ).load(uri)
+        self._validate_predictor_contract(predictor)
+        self._warm_predictor(predictor)
         self._predictor = predictor
         self._service = self._build_service(predictor)
+
+    def _validate_predictor_contract(
+        self,
+        predictor: QuantileLightGBMDemandModel,
+    ) -> None:
+        """Reject stale artifacts before the API can report itself ready."""
+
+        expected = tuple(PricingFeatureFactory.FEATURE_COLUMNS)
+        actual = tuple(predictor.feature_names)
+        actual_version = getattr(predictor, "feature_contract_version", None)
+        actual_hash = getattr(predictor, "feature_schema_hash", None)
+        if (
+            actual != expected
+            or actual_version != PricingFeatureFactory.VERSION
+            or actual_hash != PricingFeatureFactory.SCHEMA_HASH
+        ):
+            raise ModelUnavailableError(
+                "Configured model uses an incompatible feature contract. "
+                f"Expected version={PricingFeatureFactory.VERSION}, "
+                f"schema_hash={PricingFeatureFactory.SCHEMA_HASH}, columns={expected}; "
+                f"got version={actual_version}, schema_hash={actual_hash}, columns={actual}. "
+                "Retrain and promote a compatible model."
+            )
+        if not getattr(predictor, "currency", None):
+            raise ModelUnavailableError("Configured model does not declare its training currency.")
+        tenant_ids = getattr(predictor, "tenant_ids", ())
+        if not tenant_ids:
+            raise ModelUnavailableError(
+                "Configured model does not declare its governed tenant scope."
+            )
+        configured_tenant = self.settings.serving_tenant_id or self.settings.api_key_tenant_id
+        if configured_tenant is not None and configured_tenant not in tenant_ids:
+            raise ModelUnavailableError(
+                "Configured API tenant binding is incompatible with the model tenant scope."
+            )
+
+    @staticmethod
+    def _warm_predictor(predictor: QuantileLightGBMDemandModel) -> None:
+        """Fail readiness closed and pre-initialize model/SHAP native state."""
+
+        try:
+            feature_names = tuple(predictor.feature_names)
+            row = pd.DataFrame(
+                [{name: predictor.feature_means[name] for name in feature_names}],
+                columns=feature_names,
+            )
+            estimates = predictor.predict(row)
+            if len(estimates) != 1:
+                raise ValueError("Warm-up inference did not return exactly one estimate.")
+            predictor.global_feature_importance(top_k=1)
+            predictor.explain(row, top_k=1)
+        except Exception as error:
+            raise ModelUnavailableError(
+                "Configured model failed inference and explainability warm-up."
+            ) from error
 
     def _build_service(self, predictor: QuantileLightGBMDemandModel) -> RecommendPrice:
         return RecommendPrice(
             predictor=predictor,
             feature_factory=PricingFeatureFactory(),
             pricing_policy=PricingPolicy(),
-            settings=self.settings,
+            maximum_candidates=self.settings.recommendation_max_candidates,
         )

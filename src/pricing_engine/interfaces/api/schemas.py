@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -10,14 +10,20 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StringConstraints,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 from pricing_engine.domain.models import PriceConstraints, PricingContext, PricingRecommendation
 
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+Identifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+]
 PositiveMoney = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
 
 
@@ -29,7 +35,7 @@ class PriceConstraintsRequest(BaseModel):
     min_price: PositiveMoney
     max_price: PositiveMoney
     price_increment: PositiveMoney = Decimal("1.00")
-    max_price_change_pct: Decimal | None = Field(default=Decimal("0.35"), ge=0, le=1)
+    max_price_change_pct: Decimal = Field(default=Decimal("0.35"), ge=0, le=Decimal("0.35"))
     min_expected_occupancy: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("max_price")
@@ -56,8 +62,8 @@ class PricingRecommendationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    tenant_id: Annotated[str, Field(min_length=1, max_length=100)]
-    property_id: Annotated[str, Field(min_length=1, max_length=100)]
+    tenant_id: Identifier
+    property_id: Identifier
     stay_date: date
     as_of_date: date
     currency: CurrencyCode = "USD"
@@ -68,9 +74,64 @@ class PricingRecommendationRequest(BaseModel):
     bedrooms: int = Field(ge=0, le=20)
     accommodates: int = Field(ge=1, le=50)
     review_score: float = Field(ge=0, le=5)
-    is_holiday: bool = False
+    is_holiday: StrictBool = False
     event_intensity: float = Field(default=0, ge=0, le=5)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     constraints: PriceConstraintsRequest
+
+    @field_validator("stay_date", "as_of_date", mode="before")
+    @classmethod
+    def require_iso_calendar_date(cls, value: object) -> object:
+        """Reject epoch integers and datetime coercion at the public boundary."""
+
+        if isinstance(value, datetime):
+            raise ValueError("Date fields must not contain a time component.")
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str) or (
+            len(value) != 10
+            or value[4] != "-"
+            or value[7] != "-"
+            or not (value[:4] + value[5:7] + value[8:]).isdigit()
+        ):
+            raise ValueError("Date fields must use the ISO YYYY-MM-DD format.")
+        try:
+            return date.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("Date fields must contain a valid calendar date.") from error
+
+    @field_validator("bedrooms", "accommodates", mode="before")
+    @classmethod
+    def require_json_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("Capacity fields must be JSON integers, not coerced values.")
+        return value
+
+    @field_validator(
+        "historical_occupancy_7d",
+        "booking_pace_7d",
+        "review_score",
+        "event_intensity",
+        "latitude",
+        "longitude",
+        mode="before",
+    )
+    @classmethod
+    def require_json_number(cls, value: object) -> object:
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Numeric signals must be JSON numbers, not coerced values.")
+        return value
+
+    @model_validator(mode="after")
+    def coordinates_must_be_paired(self) -> PricingRecommendationRequest:
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError(
+                "latitude and longitude must either both be provided or both be omitted."
+            )
+        return self
 
     def to_domain(self) -> PricingContext:
         return PricingContext(
@@ -89,6 +150,8 @@ class PricingRecommendationRequest(BaseModel):
             is_holiday=self.is_holiday,
             event_intensity=self.event_intensity,
             constraints=self.constraints.to_domain(),
+            latitude=self.latitude,
+            longitude=self.longitude,
         )
 
 
@@ -172,3 +235,10 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_version: str | None = None
+
+
+class ErrorResponse(BaseModel):
+    """Stable public error envelope without internal exception details."""
+
+    error: str
+    detail: str | list[dict[str, object]]
