@@ -17,6 +17,7 @@ from pricing_engine.application.evaluation import (
 )
 from pricing_engine.application.training_service import (
     ChronologicalSplitter,
+    TrainDemandModel,
     _equal_stay_training_weights,
 )
 from pricing_engine.domain.exceptions import PromotionRejectedError
@@ -224,6 +225,42 @@ def test_purged_split_prevents_label_and_stay_group_leakage(demo_observations) -
     assert calibration_groups.isdisjoint(test_groups)
 
 
+def test_valid_crossing_snapshots_are_purged_before_stay_isolation(
+    demo_observations,
+) -> None:
+    dates = pd.Index(
+        pd.to_datetime(demo_observations["as_of_date"]).dt.normalize().unique()
+    ).sort_values()
+    train_end = max(1, int(len(dates) * 0.70))
+    calibration_end = max(train_end + 1, int(len(dates) * 0.85))
+    calibration_as_of = pd.Timestamp(dates[calibration_end - 1])
+    test_as_of = pd.Timestamp(dates[calibration_end])
+    stay_date = test_as_of + pd.Timedelta(days=1)
+    outcome_available_date = stay_date + pd.Timedelta(days=1)
+    crossing = pd.concat([demo_observations.head(1)] * 2, ignore_index=True)
+    crossing["property_id"] = "crossing-property"
+    crossing["as_of_date"] = [calibration_as_of, test_as_of]
+    crossing["stay_date"] = stay_date
+    crossing["outcome_available_date"] = outcome_available_date
+    augmented = pd.concat([demo_observations, crossing], ignore_index=True)
+    validated = validate_training_frame(augmented)
+    features = PricingFeatureFactory().build_training_features(validated)
+
+    partitions = ChronologicalSplitter().split(validated, features)
+
+    group_columns = ["tenant_id", "property_id", "stay_date"]
+    crossing_key = tuple(
+        validated.loc[validated["property_id"] == "crossing-property", group_columns].iloc[0]
+    )
+
+    def groups(frame: pd.DataFrame) -> set[tuple[object, ...]]:
+        return set(frame[group_columns].itertuples(index=False, name=None))
+
+    assert crossing_key not in groups(partitions.train_context)
+    assert crossing_key not in groups(partitions.calibration_context)
+    assert crossing_key in groups(partitions.test_context)
+
+
 def test_temporal_split_rejects_invalid_embargo_and_insufficient_evidence(
     demo_observations,
 ) -> None:
@@ -408,6 +445,65 @@ def _policy_metrics(
         any_price_boundary_rate=lower_boundary_rate + upper_boundary_rate,
         mean_selected_price_change_pct=mean_selected_price_change_pct,
     )
+
+
+def _healthy_slice(name: str) -> SliceEvaluationMetrics:
+    return SliceEvaluationMetrics(
+        name=name,
+        occupancy_mae=0.10,
+        interval_coverage=0.90,
+        expected_revenue_wape=0.10,
+        sample_size=30,
+        unique_stays=30,
+        mean_price_response=0.10,
+        flat_price_response_rate=0.0,
+        upper_price_boundary_rate=0.0,
+        lower_price_boundary_rate=0.0,
+        any_price_boundary_rate=0.0,
+        mean_selected_price_change_pct=0.05,
+    )
+
+
+@pytest.mark.parametrize("location_slice", ["location/known", "location/unknown"])
+def test_location_promotion_slice_is_conditional_on_observed_cohort(
+    location_slice: str,
+) -> None:
+    criteria = PromotionCriteria()
+    assert "location/known" not in criteria.required_slices
+    assert "location/unknown" not in criteria.required_slices
+    metrics = replace(
+        _policy_metrics(),
+        slices=tuple(_healthy_slice(name) for name in (*criteria.required_slices, location_slice)),
+    )
+
+    criteria.evaluate(metrics)
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "expected_slice"),
+    [(25.7617, -80.1918, "location/known"), (None, None, "location/unknown")],
+)
+def test_location_slices_emit_only_non_empty_observed_cohorts(
+    latitude: float | None,
+    longitude: float | None,
+    expected_slice: str,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "stay_date": [date(2026, 8, 15)],
+            "as_of_date": [date(2026, 7, 18)],
+            "is_holiday": [False],
+            "event_intensity": [0.0],
+            "latitude": [latitude],
+            "longitude": [longitude],
+        }
+    )
+
+    memberships = TrainDemandModel._build_slice_memberships(frame)
+
+    assert expected_slice in memberships
+    absent_slice = "location/unknown" if expected_slice == "location/known" else "location/known"
+    assert absent_slice not in memberships
 
 
 def test_promotion_rejects_policy_saturated_at_lower_boundary() -> None:

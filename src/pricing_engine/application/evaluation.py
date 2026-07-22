@@ -243,8 +243,6 @@ class PromotionCriteria:
         "holiday/no",
         "event/none",
         "event/active",
-        "location/known",
-        "location/unknown",
     )
 
     def evaluate(
