@@ -290,7 +290,9 @@ jobs:
 
           model_dir = Path(
               mlflow.artifacts.download_artifacts(
-                  artifact_uri=f"models:/{model_name}/{expected_version}"
+                  artifact_uri=f"models:/{model_name}/{expected_version}",
+                  tracking_uri="http://mlflow:5000",
+                  registry_uri="http://mlflow:5000",
               )
           )
           lock_path = model_dir / "uv.lock"
