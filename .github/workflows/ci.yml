@@ -115,12 +115,14 @@ jobs:
     env:
       CI_EXPERIMENT_NAME: pricing-demand-ci-${{ github.run_id }}-${{ github.run_attempt }}
       CI_MODEL_NAME: pricing-demand-ci
-      CI_WORK_DIR: ${{ runner.temp }}/pricing-engine-ci
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Configure integration workspace
+        run: echo "CI_WORK_DIR=${RUNNER_TEMP}/pricing-engine-ci" >> "${GITHUB_ENV}"
 
       - name: Validate Compose model
         run: docker compose config --quiet
