@@ -15,6 +15,7 @@ from pricing_engine.interfaces.api.app import (
     create_app,
 )
 from pricing_engine.interfaces.api.container import ApplicationContainer
+from pricing_engine.interfaces.api.schemas import PricingRecommendationRequest
 
 PRODUCTION_API_KEY = "production-key-with-at-least-32-characters"
 
@@ -202,6 +203,17 @@ def test_public_contract_rejects_semantic_coercion(
         response = client.post("/v1/pricing/recommendations", json=payload)
 
     assert response.status_code == 422
+
+
+def test_legacy_tenant_identifier_limit_remains_100_characters() -> None:
+    payload = _payload()
+    payload["tenant_id"] = "t" * 100
+
+    assert len(PricingRecommendationRequest.model_validate(payload).tenant_id) == 100
+
+    payload["tenant_id"] = "t" * 101
+    with pytest.raises(ValidationError, match="tenant_id"):
+        PricingRecommendationRequest.model_validate(payload)
 
 
 def test_api_rejects_price_change_outside_validated_policy_space(training_outcome) -> None:

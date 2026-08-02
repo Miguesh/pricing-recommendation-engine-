@@ -26,6 +26,7 @@ DEFAULT_EVIDENCE_POLICY_VERSION = "evidence-quality-v1.0.0"
 DEFAULT_OUTLIER_POLICY_VERSION = "weighted-tukey-v1.0.0"
 ENGINE_VERSION = "0.1.0"
 MAX_COMPARABLES = 50
+MAX_STATISTICAL_IDENTITY_LENGTH = 128
 MAX_STATISTICAL_REQUEST_BYTES = 1_048_576
 
 Identifier = Annotated[
@@ -33,7 +34,7 @@ Identifier = Annotated[
     StringConstraints(
         strip_whitespace=True,
         min_length=1,
-        max_length=128,
+        max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     ),
 ]

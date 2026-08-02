@@ -153,6 +153,10 @@ analytical batch. It accepts at most 50 comparables and 50 matching lineage
 entries, and its compact UTF-8 body must not exceed 1,048,576 bytes in either
 the HTTP or CLI transport. `capabilities` reports those contractual maxima and,
 for HTTP, any explicitly lower operational body limit.
+For the stable profile, `required_fields` is a complete recursive inventory of
+required envelope, target-feature, comparable, and lineage paths. Contract
+tests derive that inventory from the Pydantic JSON Schema so a newly required
+field cannot silently drift from capabilities.
 
 Evidence quality is classified from raw `Decimal` ESS, average similarity, and
 dispersion values. Only response presentation is quantized (ESS and dispersion
@@ -221,7 +225,10 @@ observation_hash)` tuple must exactly cover the comparable evidence. No silent
 fallback crosses profiles.
 
 If `PRICING_API_KEY` is configured, send `X-API-Key`; when identity binding is
-configured, statistical `organization_id` must match it.
+configured, statistical `organization_id` must match it. Statistical
+organization identity is bounded to 128 characters across the public contract,
+API-key binding, serving-tenant binding, and trusted-proxy value. The retained
+experimental request keeps its separate 100-character `tenant_id` limit.
 
 The following legacy example illustrates the preserved model-backed API:
 

@@ -30,6 +30,7 @@ from pricing_engine.domain.exceptions import (
     StatisticalContractError,
 )
 from pricing_engine.domain.statistical import (
+    MAX_STATISTICAL_IDENTITY_LENGTH,
     CapabilitiesResponse,
     EngineProfile,
     StatisticalPricingRequest,
@@ -427,7 +428,7 @@ def create_app(
                 headers={"WWW-Authenticate": "ApiKey"},
             )
         normalized_tenant = supplied_tenant.strip()
-        if len(normalized_tenant) > 100:
+        if len(normalized_tenant) > MAX_STATISTICAL_IDENTITY_LENGTH:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Trusted tenant identity is invalid.",

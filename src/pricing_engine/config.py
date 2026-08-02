@@ -9,7 +9,10 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from pricing_engine.domain.statistical import MAX_STATISTICAL_REQUEST_BYTES
+from pricing_engine.domain.statistical import (
+    MAX_STATISTICAL_IDENTITY_LENGTH,
+    MAX_STATISTICAL_REQUEST_BYTES,
+)
 
 
 class Settings(BaseSettings):
@@ -29,8 +32,16 @@ class Settings(BaseSettings):
     api_title: str = "Pricing Recommendation Engine"
     api_version: str = "0.1.0"
     api_key: SecretStr | None = None
-    api_key_tenant_id: str | None = Field(default=None, min_length=1, max_length=100)
-    serving_tenant_id: str | None = Field(default=None, min_length=1, max_length=100)
+    api_key_tenant_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+    )
+    serving_tenant_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+    )
     trusted_hosts: list[str] = Field(default_factory=list)
     trust_proxy_identity: bool = False
     trusted_tenant_header: str | None = Field(default=None, min_length=1, max_length=100)
@@ -59,13 +70,18 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("api_key_tenant_id", "serving_tenant_id", "trusted_tenant_header")
+    @field_validator(
+        "api_key_tenant_id",
+        "serving_tenant_id",
+        "trusted_tenant_header",
+        mode="before",
+    )
     @classmethod
-    def normalize_optional_identity_value(cls, value: str | None) -> str | None:
+    def normalize_optional_identity_value(cls, value: object) -> object:
         """Normalize security identifiers and reject whitespace-only values."""
 
-        if value is None:
-            return None
+        if not isinstance(value, str):
+            return value
         normalized = value.strip()
         if not normalized:
             raise ValueError("Security identity values cannot be blank.")

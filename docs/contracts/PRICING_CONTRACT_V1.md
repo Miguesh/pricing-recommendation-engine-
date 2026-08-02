@@ -71,6 +71,13 @@ self-describing; the parser does not infer them for contract v1.
 Unknown fields are rejected (`extra="forbid"`). Strings are trimmed. Contract
 models are immutable after validation.
 
+`GET /v1/capabilities` publishes a complete recursive inventory of these
+required fields. Object children use `parent.child`, array-item children use
+`parent[].child`, and the two deliberate safety literals are published as
+`publication_allowed=false` and `commercial_validation=false`. Contract tests
+derive the required and optional path sets from the validation JSON Schema and
+fail if this metadata drifts.
+
 ## Target property features
 
 | Field | Type and constraints |
@@ -275,8 +282,12 @@ is reported as `effective_request_body_limit_bytes`. Capabilities also reports
 The POST endpoint additionally applies API-key/organization binding when
 configured, a body-read deadline, a concurrency bulkhead, and a soft execution
 deadline. A configured authorized tenant is compared with statistical
-`organization_id`. These local controls do not replace production identity,
-TLS, gateway rate limits, or audit storage.
+`organization_id`. After surrounding whitespace normalization, the statistical
+identity maximum is 128 characters in the contract, `api_key_tenant_id`,
+`serving_tenant_id`, and trusted-proxy header value; a longer configured or
+supplied identity fails closed. The name of the trusted header retains its
+separate HTTP-field-name constraint. These local controls do not replace
+production identity, TLS, gateway rate limits, or audit storage.
 
 ## Compatibility policy
 
@@ -291,4 +302,6 @@ semantics changed deliberately: the no-query readiness check now targets the
 stable default profile. Legacy monitors that used a 503 response to detect a
 missing model must migrate to the explicit experimental-profile query above.
 This is a documented compatibility migration, not an assertion of silent full
-compatibility.
+compatibility. The experimental request's `tenant_id` and `property_id` remain
+bounded to 100 characters; widening statistical authentication configuration
+does not change that legacy wire contract.

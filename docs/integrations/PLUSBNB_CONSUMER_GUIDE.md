@@ -48,6 +48,11 @@ uv sync --locked --extra dev --python 3.12
 uv run pricing-engine capabilities
 ```
 
+For the stable profile, `required_fields` includes every required nested target
+property, comparable, and lineage path. The engine tests this inventory
+recursively against `StatisticalPricingRequest` JSON Schema; consumers should
+still pin and review the returned contract metadata.
+
 Validate the synthetic consumer fixture:
 
 ```powershell
@@ -89,9 +94,10 @@ treated as a Medellín baseline, market quote, or production default.
    `market_config_version`. Every comparable must match currency, timezone,
    dates, nights, and guests exactly in v1; send exactly one matching lineage
    entry per comparable, also capped at 50.
-7. Create opaque organization/property/source identifiers. Never serialize
-   display names, addresses, coordinates, listing URLs, calendar URLs, or raw
-   source records.
+7. Create opaque organization/property/source identifiers. Statistical
+   `organization_id` may contain at most 128 characters and must be identical to
+   the authenticated organization binding. Never serialize display names,
+   addresses, coordinates, listing URLs, calendar URLs, or raw source records.
 8. Send required `availability_observed` as a boolean or null, and send
    `quality_flags` explicitly (an empty array is valid).
 9. Send decimal money as JSON strings and explicit profile/policy versions.
@@ -129,8 +135,12 @@ Invoke-RestMethod `
 
 If `PRICING_API_KEY` is configured, add `X-API-Key`. In a bound deployment,
 the authenticated tenant/organization must equal `organization_id`; a mismatch
-returns 403. Production also requires TLS, gateway controls, managed secrets,
-and an externally auditable identity binding.
+returns 403. API-key binding, serving-tenant routing, and a trusted-proxy
+identity all accept the statistical contract maximum of 128 characters and
+reject longer values without echoing them. This does not widen the separate
+legacy experimental `tenant_id` maximum of 100. Production also requires TLS,
+gateway controls, managed secrets, and an externally auditable identity
+binding.
 
 `GET /health/ready` confirms that the stable statistical profile can execute
 and is expected to return 200 without a model. To check the model-backed path,
@@ -207,7 +217,10 @@ Do not use a hash as evidence of source permission or as a digital signature.
 
 - [ ] `GET /v1/capabilities` advertises the stable profile, exact versions,
       50/50 collection maxima, 1,048,576-byte contract maximum, effective HTTP
-      limit, and `batch_supported=false`.
+      limit, `batch_supported=false`, and all required nested schema paths.
+- [ ] Statistical identities through 128 characters authenticate through the
+      selected API-key or trusted-proxy binding; 129-character values fail
+      closed and the legacy request remains bounded to 100.
 - [ ] The checked-in synthetic fixture validates and recommends with no model
       URI or external service.
 - [ ] PLUSBNB rejects or quarantines PII/private URLs before serialization.

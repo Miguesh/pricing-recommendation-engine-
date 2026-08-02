@@ -59,7 +59,7 @@ deployment principal.
 
 | Threat | Current control | Residual risk / owner |
 | --- | --- | --- |
-| Cross-organization request | Optional API key plus configured key/tenant or trusted-gateway binding; statistical `organization_id` is checked | Local auth is not enterprise IAM; deployment must supply TLS, key rotation, gateway identity, and authorization |
+| Cross-organization request | Optional API key plus configured key/tenant or trusted-gateway binding; statistical `organization_id` and both binding modes share an explicit 128-character maximum and fail closed on mismatch/overflow | Local auth is not enterprise IAM; deployment must supply TLS, key rotation, gateway identity, and authorization; legacy request IDs retain their separate 100-character contract |
 | PII/private URL exfiltration | Strict bounded fields; documentation prohibits sensitive content; logs omit full payloads | Opaque strings cannot prove content is non-sensitive; PLUSBNB must minimize and scan before sending |
 | Currency mixing | Uppercase currency schema and exact per-comparable equality; no FX code path | Three-letter format is not a full ISO registry; consumer owns code validity and prior normalization |
 | Temporal leakage | Offset-aware timestamps and `observed_at`/`known_at <= as_of`; exact scenario checks | Consumer controls truthfulness and point-in-time queries; numeric offsets are not cross-checked against the declared IANA zone |
@@ -67,7 +67,7 @@ deployment principal.
 | Weight manipulation | Scores/factors bounded `[0,100]`; low individual/average similarity and ESS gates | Engine cannot validate the similarity methodology or factor-to-score consistency; consumer governance required |
 | Price poisoning/outliers | Positive decimal money, weighted Tukey audit/exclusion, dispersion abstention | Coordinated plausible prices can remain; outlier rules are not fraud detection |
 | Duplicate/replay | Duplicate comparable IDs rejected; deterministic request/run hashes | Requests are not persisted or nonce-checked; consumer owns idempotency and replay controls |
-| Schema smuggling | Pydantic strict objects reject unknown fields; bounded strings/collections; no `eval` or dynamic imports | Union request evolution must be reviewed for ambiguous parsing |
+| Schema smuggling | Pydantic strict objects reject unknown fields; bounded strings/collections; capabilities required/optional paths are recursively checked against validation JSON Schema; no `eval` or dynamic imports | Union request evolution must be reviewed for ambiguous parsing |
 | Binary-float money/non-finite values | Money accepted only as decimal strings and stored/calculated with `Decimal` | Downstream systems can reintroduce float error; consumer must preserve string/decimal semantics |
 | Payload/compute exhaustion | Shared HTTP/CLI maximum 1,048,576 bytes; API may be configured lower and reports the effective limit; max 50 comparables and 50 lineage entries per single-decision request; read deadline, bulkhead, soft execution timeout | Per-process controls are not distributed rate limits; a lower operational limit can reject a larger contract-valid document; timed-out native work may continue until completion |
 | Error data leakage | Validation errors keep only type/location/message; internal errors are generic; full payloads are not logged | Human-readable contract details and identifiers still require log access control and retention |
@@ -106,6 +106,9 @@ pricing completion metadata rather than complete request/response payloads.
 Identifiers are still potentially linkable pseudonyms. Logs need access
 control, retention, deletion, and incident procedures.
 
+An overlong trusted identity is rejected with a generic response before tenant
+authorization and is not included in response bodies or application telemetry.
+
 Never send or log names, contact information, addresses, precise coordinates,
 listing/calendar/private URLs, credentials, cookies, messages, payment data, or
 raw CSV. `source_family_id` is a taxonomy identifier, not a place for a URL.
@@ -131,8 +134,10 @@ default.
 Release checks should cover locked dependency validation, formatter/lint, strict
 type checking, unit/contract/property/API/CLI tests, OpenAPI reproducibility,
 build/install smoke, Docker non-root/read-only smoke, dependency audit, secret
-scan, forbidden-artifact review, and `git diff --check`. Tests must not require
-live external services for the statistical profile.
+scan, forbidden-artifact review, and `git diff --check`. Schema tests must also
+prove capabilities contains the recursive required-field inventory and does not
+mislabel documented optional fields. Tests must not require live external
+services for the statistical profile.
 
 ## Residual risks requiring PLUSBNB controls
 

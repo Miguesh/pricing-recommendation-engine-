@@ -49,6 +49,13 @@ All notable changes to this project are documented here. The format follows
   schema reflects the same boundaries.
 - The lock now resolves GitPython 3.1.57 and the development test runner pytest
   9.1.1, clearing the dependency-audit advisories found during final validation.
+- Statistical organization identities up to 128 normalized characters can now
+  pass both API-key and trusted-proxy tenant binding; 129-character
+  configuration/header values fail closed without disclosure, while the legacy
+  request stays at 100.
+- Stable-profile capabilities now lists every required nested target-property,
+  comparable, and lineage field. A recursive JSON Schema regression detects
+  required/optional metadata drift.
 
 ### Compatibility
 

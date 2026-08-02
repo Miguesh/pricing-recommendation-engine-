@@ -51,6 +51,13 @@ profile. HTTP and CLI share a 1,048,576-byte statistical request maximum. The
 API can be configured lower; capabilities distinguishes that effective limit
 from the contractual maximum.
 
+The stable `organization_id` boundary is 128 characters. API-key tenant
+binding, serving-tenant routing, and trusted-proxy identity values use that same
+explicit maximum, while the retained experimental request keeps its existing
+100-character tenant/property identifiers. Stable capabilities enumerates all
+required nested contract paths, with a recursive validation-schema test to
+detect metadata drift.
+
 Evidence quality compares raw Decimal ESS, average similarity, and dispersion.
 Only the response components are quantized. When the initial eligible set is
 empty, any stale exclusion takes top-level precedence over low similarity while
