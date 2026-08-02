@@ -25,7 +25,8 @@ DEFAULT_ALGORITHM_CONFIG_VERSION = "market-evidence-statistical-v1.0.0"
 DEFAULT_EVIDENCE_POLICY_VERSION = "evidence-quality-v1.0.0"
 DEFAULT_OUTLIER_POLICY_VERSION = "weighted-tukey-v1.0.0"
 ENGINE_VERSION = "0.1.0"
-MAX_COMPARABLES = 200
+MAX_COMPARABLES = 50
+MAX_STATISTICAL_REQUEST_BYTES = 1_048_576
 
 Identifier = Annotated[
     str,
@@ -264,6 +265,8 @@ class StatisticalComparable(StrictContractModel):
 
 
 class StatisticalPricingRequest(StrictContractModel):
+    """One point-in-time pricing decision; analytical batch requests are unsupported."""
+
     contract_version: Literal["1.0"]
     request_id: Identifier
     correlation_id: Identifier
@@ -286,8 +289,16 @@ class StatisticalPricingRequest(StrictContractModel):
     outlier_policy_version: VersionIdentifier
     algorithm_config_version: VersionIdentifier
     target_property_features: TargetPropertyFeatures
-    comparables: tuple[StatisticalComparable, ...] = Field(min_length=1, max_length=MAX_COMPARABLES)
-    input_lineage: tuple[LineageEntry, ...] = Field(min_length=1, max_length=MAX_COMPARABLES)
+    comparables: tuple[StatisticalComparable, ...] = Field(
+        min_length=1,
+        max_length=MAX_COMPARABLES,
+        description="Authorized evidence for this single pricing decision.",
+    )
+    input_lineage: tuple[LineageEntry, ...] = Field(
+        min_length=1,
+        max_length=MAX_COMPARABLES,
+        description="One governed lineage entry per comparable in this decision.",
+    )
     publication_allowed: Literal[False]
     commercial_validation: Literal[False]
 
@@ -426,6 +437,27 @@ class ProfileCapability(StrictContractModel):
     profile: EngineProfile
     status: Literal["stable_contract", "experimental"]
     version: VersionIdentifier
+    maximum_request_body_bytes: int = Field(
+        ge=1_024,
+        description="Contractual compact-request transport maximum.",
+    )
+    effective_request_body_limit_bytes: int = Field(
+        ge=1_024,
+        description="Current API operational limit, which may be lower than the contract maximum.",
+    )
+    maximum_comparables: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum comparable observations for one decision, when applicable.",
+    )
+    maximum_input_lineage_entries: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum lineage entries for one decision, when applicable.",
+    )
+    batch_supported: StrictBool = Field(
+        description="Whether one request may contain multiple pricing decisions."
+    )
     required_fields: tuple[str, ...]
     optional_fields: tuple[str, ...]
     limitations: tuple[str, ...]

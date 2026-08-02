@@ -24,6 +24,7 @@ from pricing_engine.application.statistical_service import (
 )
 from pricing_engine.domain.exceptions import StatisticalContractError
 from pricing_engine.domain.statistical import (
+    MAX_COMPARABLES,
     AbstentionReason,
     EngineProfile,
     EvidenceQuality,
@@ -375,6 +376,203 @@ def test_quality_classes_are_explicit_and_not_probabilities() -> None:
 
 
 @pytest.mark.parametrize(
+    ("prices", "expected_quality", "serialized_dispersion"),
+    [
+        (
+            (
+                "65.0000",
+                "65.0000",
+                "80.0000",
+                "100.0000",
+                "100.0000",
+                "100.0000",
+                "110.0000",
+                "115.0000",
+            ),
+            EvidenceQuality.HIGH,
+            "0.3500",
+        ),
+        (
+            (
+                "64.9960",
+                "64.9960",
+                "80.0000",
+                "100.0000",
+                "100.0000",
+                "100.0000",
+                "110.0000",
+                "115.0000",
+            ),
+            EvidenceQuality.MODERATE,
+            "0.3500",
+        ),
+        (
+            ("40.0000", "40.0000", "100.0000", "100.0000", "110.0000"),
+            EvidenceQuality.MODERATE,
+            "0.6000",
+        ),
+        (
+            ("39.9960", "39.9960", "100.0000", "100.0000", "110.0000"),
+            EvidenceQuality.LOW,
+            "0.6000",
+        ),
+    ],
+)
+def test_evidence_quality_uses_raw_dispersion_before_response_quantization(
+    prices: tuple[str, ...],
+    expected_quality: EvidenceQuality,
+    serialized_dispersion: str,
+) -> None:
+    payload = _payload()
+    payload["comparables"] = _comparables(payload)[: len(prices)]
+    _synchronize_lineage(payload)
+    for comparable, price in zip(_comparables(payload), prices, strict=True):
+        comparable["effective_base_nightly_rate"] = price
+        comparable["effective_total_nightly_rate"] = price
+
+    response = _recommend(payload)
+    serialized = json.loads(response.model_dump_json())
+
+    assert response.status is RecommendationStatus.RECOMMENDED
+    assert response.evidence_quality is expected_quality
+    assert serialized["evidence_components"]["dispersion_ratio"] == serialized_dispersion
+
+
+def test_evidence_quality_uses_raw_ess_below_high_boundary() -> None:
+    raw_ess = Decimal("5.99996")
+    assert raw_ess.quantize(Decimal("0.0001")) == Decimal("6.0000")
+
+    quality = MarketEvidenceStatisticalV1()._quality(
+        comparable_count_used=8,
+        raw_effective_sample_size=raw_ess,
+        raw_average_similarity=Decimal("80"),
+        raw_dispersion_ratio=Decimal("0.35"),
+    )
+
+    assert quality is EvidenceQuality.MODERATE
+
+
+def test_evidence_quality_uses_raw_average_similarity_below_high_boundary() -> None:
+    payload = _payload()
+    for comparable in _comparables(payload):
+        comparable["similarity_score"] = "79.9999"
+
+    response = _recommend(payload)
+    serialized = json.loads(response.model_dump_json())
+
+    assert response.evidence_quality is EvidenceQuality.MODERATE
+    assert serialized["evidence_components"]["average_similarity"] == "80.00"
+
+
+def test_boundary_quality_result_remains_deterministic_when_reordered() -> None:
+    payload = _payload()
+    prices = (
+        "64.9960",
+        "64.9960",
+        "80.0000",
+        "100.0000",
+        "100.0000",
+        "100.0000",
+        "110.0000",
+        "115.0000",
+    )
+    for comparable, price in zip(_comparables(payload), prices, strict=True):
+        comparable["effective_base_nightly_rate"] = price
+        comparable["effective_total_nightly_rate"] = price
+    request = _request(payload)
+    reordered = request.model_copy(
+        update={
+            "comparables": tuple(reversed(request.comparables)),
+            "input_lineage": tuple(reversed(request.input_lineage)),
+        }
+    )
+
+    first = MarketEvidenceStatisticalV1().recommend(request)
+    second = MarketEvidenceStatisticalV1().recommend(reordered)
+
+    assert first.evidence_quality is EvidenceQuality.MODERATE
+    assert first.model_dump_json() == second.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_reason", "expected_exclusions"),
+    [
+        (
+            "all_stale",
+            AbstentionReason.STALE_EVIDENCE,
+            {
+                "cmp-001": ("STALE_EVIDENCE",),
+                "cmp-002": ("STALE_EVIDENCE",),
+                "cmp-003": ("STALE_EVIDENCE",),
+            },
+        ),
+        (
+            "all_low_similarity",
+            AbstentionReason.LOW_SIMILARITY,
+            {
+                "cmp-001": ("LOW_SIMILARITY",),
+                "cmp-002": ("LOW_SIMILARITY",),
+                "cmp-003": ("LOW_SIMILARITY",),
+            },
+        ),
+        (
+            "mixed",
+            AbstentionReason.STALE_EVIDENCE,
+            {
+                "cmp-001": ("STALE_EVIDENCE",),
+                "cmp-002": ("LOW_SIMILARITY",),
+                "cmp-003": ("STALE_EVIDENCE", "LOW_SIMILARITY"),
+            },
+        ),
+    ],
+)
+def test_empty_eligible_set_uses_stale_precedence_and_complete_diagnostics(
+    case: str,
+    expected_reason: AbstentionReason,
+    expected_exclusions: dict[str, tuple[str, ...]],
+) -> None:
+    payload = _payload()
+    payload["comparables"] = _comparables(payload)[:3]
+    _synchronize_lineage(payload)
+    comparables = _comparables(payload)
+    if case == "all_stale":
+        for comparable in comparables:
+            comparable["observed_at"] = "2026-01-01T09:00:00-05:00"
+            comparable["known_at"] = "2026-01-01T10:00:00-05:00"
+    elif case == "all_low_similarity":
+        for comparable in comparables:
+            comparable["similarity_score"] = "39.9999"
+    else:
+        comparables[0]["observed_at"] = "2026-01-01T09:00:00-05:00"
+        comparables[0]["known_at"] = "2026-01-01T10:00:00-05:00"
+        comparables[1]["similarity_score"] = "39.9999"
+        comparables[2]["observed_at"] = "2026-01-01T09:00:00-05:00"
+        comparables[2]["known_at"] = "2026-01-01T10:00:00-05:00"
+        comparables[2]["similarity_score"] = "39.9999"
+
+    request = _request(payload)
+    response = MarketEvidenceStatisticalV1().recommend(request)
+    reordered = request.model_copy(
+        update={
+            "comparables": tuple(reversed(request.comparables)),
+            "input_lineage": tuple(reversed(request.input_lineage)),
+        }
+    )
+    reordered_response = MarketEvidenceStatisticalV1().recommend(reordered)
+
+    assert response.status is RecommendationStatus.ABSTAINED
+    assert response.abstention is not None
+    assert response.abstention.reason is expected_reason
+    assert response.recommendation is None
+    assert response.pricing_band is None
+    assert response.comparable_ids_used == ()
+    assert response.exclusion_reasons == expected_exclusions
+    assert set(response.comparable_ids_excluded) == set(expected_exclusions)
+    assert "fallback" in response.warnings[0].lower()
+    assert response.model_dump_json() == reordered_response.model_dump_json()
+
+
+@pytest.mark.parametrize(
     ("case", "expected_code"),
     [
         ("duplicate", "DUPLICATE_COMPARABLE"),
@@ -532,28 +730,29 @@ def test_each_request_supports_one_currency_without_conversion() -> None:
     assert euro.pricing_band.high == baseline.pricing_band.high
 
 
-def test_comparable_and_lineage_collections_are_bounded() -> None:
+@pytest.mark.parametrize("field", ["comparables", "input_lineage"])
+def test_comparable_and_lineage_collections_reject_51_items(field: str) -> None:
     payload = _payload()
     comparable_template = deepcopy(_comparables(payload)[0])
     lineage = payload["input_lineage"]
     assert isinstance(lineage, list)
     lineage_template = deepcopy(lineage[0])
-    payload["comparables"] = []
-    payload["input_lineage"] = []
-    for index in range(201):
+    bounded_items: list[dict[str, object]] = []
+    for index in range(MAX_COMPARABLES + 1):
         observation_hash = f"{index:064x}"
-        comparable = deepcopy(comparable_template)
-        comparable["comparable_id"] = f"cmp-bounded-{index:03d}"
-        comparable["observation_hash"] = observation_hash
-        _comparables(payload).append(comparable)
-        entry = deepcopy(lineage_template)
-        entry["lineage_id"] = f"lineage-bounded-{index:03d}"
-        entry["observation_hash"] = observation_hash
-        entries = payload["input_lineage"]
-        assert isinstance(entries, list)
-        entries.append(entry)
+        if field == "comparables":
+            comparable = deepcopy(comparable_template)
+            comparable["comparable_id"] = f"cmp-bounded-{index:03d}"
+            comparable["observation_hash"] = observation_hash
+            bounded_items.append(comparable)
+        else:
+            entry = deepcopy(lineage_template)
+            entry["lineage_id"] = f"lineage-bounded-{index:03d}"
+            entry["observation_hash"] = observation_hash
+            bounded_items.append(entry)
+    payload[field] = bounded_items
 
-    with pytest.raises(ValidationError, match=r"comparables|input_lineage"):
+    with pytest.raises(ValidationError, match=field):
         _request(payload)
 
 

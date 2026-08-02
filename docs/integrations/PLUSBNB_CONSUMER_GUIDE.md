@@ -76,7 +76,8 @@ treated as a Medellín baseline, market quote, or production default.
 
 1. Freeze an explicit `as_of` cutoff and correlation/audit identifiers.
 2. Select one market configuration, currency, IANA timezone, target stay, and
-   guest count.
+   guest count for one point-in-time pricing decision. Do not batch decisions in
+   one document.
 3. Retrieve only observations whose `observed_at` and `known_at` do not exceed
    the cutoff.
 4. Verify rights before the observation crosses the service boundary. Build one
@@ -84,9 +85,10 @@ treated as a Medellín baseline, market quote, or production default.
    `source_family_id`, `source_version`, and unique `observation_hash` values.
 5. Normalize each total nightly amount in PLUSBNB. Do not ask the engine to
    convert currency, allocate fees, or infer taxes.
-6. Select and score comparables under the recorded
+6. Select and score at most 50 comparables under the recorded
    `market_config_version`. Every comparable must match currency, timezone,
-   dates, nights, and guests exactly in v1.
+   dates, nights, and guests exactly in v1; send exactly one matching lineage
+   entry per comparable, also capped at 50.
 7. Create opaque organization/property/source identifiers. Never serialize
    display names, addresses, coordinates, listing URLs, calendar URLs, or raw
    source records.
@@ -95,6 +97,8 @@ treated as a Medellín baseline, market quote, or production default.
 9. Send decimal money as JSON strings and explicit profile/policy versions.
 10. Send both required `publication_allowed` and `commercial_validation`
     fields as false.
+11. Serialize compact UTF-8 JSON no larger than 1,048,576 bytes. Check
+    capabilities because an operator may configure a visibly lower HTTP limit.
 
 The statistical engine does not use target features to rescore evidence. A
 consumer must not assume the presence of bedrooms, amenities, or area causes an
@@ -154,6 +158,11 @@ request. Display the band, quality components, exclusions, outliers, reasons,
 and warnings to the analyst. Do not display `HIGH` as a probability or approval.
 The human review record remains a PLUSBNB responsibility.
 
+The engine assigns `evidence_quality` from raw Decimal ESS, average similarity,
+and dispersion. The displayed ESS/dispersion have four decimal places and the
+average similarity has two; never recompute or override the class from those
+rounded values.
+
 ## Interpret abstention and errors
 
 | Result | Consumer action |
@@ -170,6 +179,11 @@ The human review record remains a PLUSBNB responsibility.
 Abstention is a valid pricing result, not a transport failure. Never substitute
 the current price, an average, or an experimental-model result without an
 explicit PLUSBNB policy and human audit.
+
+When the initial recency/similarity pass leaves no evidence, any comparable
+excluded for recency makes the top-level reason `STALE_EVIDENCE`. Only when none
+is stale is the top-level reason `LOW_SIMILARITY`. In both cases, inspect the
+complete per-comparable exclusion map; it retains both reasons when applicable.
 
 ## Idempotency and audit storage
 
@@ -191,7 +205,9 @@ Do not use a hash as evidence of source permission or as a digital signature.
 
 ## Consumer contract acceptance checklist
 
-- [ ] `GET /v1/capabilities` advertises the stable profile and exact versions.
+- [ ] `GET /v1/capabilities` advertises the stable profile, exact versions,
+      50/50 collection maxima, 1,048,576-byte contract maximum, effective HTTP
+      limit, and `batch_supported=false`.
 - [ ] The checked-in synthetic fixture validates and recommends with no model
       URI or external service.
 - [ ] PLUSBNB rejects or quarantines PII/private URLs before serialization.
@@ -199,11 +215,15 @@ Do not use a hash as evidence of source permission or as a digital signature.
 - [ ] Point-in-time queries enforce both `observed_at` and `known_at <= as_of`.
 - [ ] Distinct lineage tuples exactly cover all comparables and observation
       hashes are unique within the request.
+- [ ] Each compact document represents one decision, has at most 50 comparables
+      and 50 lineage entries, and fits the effective transport limit.
 - [ ] Decimal money is serialized as strings and response money is stored
       without binary-float conversion.
 - [ ] Recommended, abstained, contract-error, and internal-error paths have
       separate handling.
 - [ ] Evidence components and warnings are visible to the analyst.
+- [ ] The stored `evidence_quality` is authoritative; rounded components are not
+      used to reclassify it.
 - [ ] An abstention cannot trigger silent fallback or automatic publication.
 - [ ] Contract tests pin OpenAPI and the synthetic consumer fixture.
 - [ ] Monitoring uses the explicit experimental readiness query when model

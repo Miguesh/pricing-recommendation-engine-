@@ -19,7 +19,10 @@ from pricing_engine.application.statistical_service import (
 )
 from pricing_engine.config import get_settings
 from pricing_engine.domain.exceptions import StatisticalContractError
-from pricing_engine.domain.statistical import StatisticalPricingRequest
+from pricing_engine.domain.statistical import (
+    MAX_STATISTICAL_REQUEST_BYTES,
+    StatisticalPricingRequest,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -31,8 +34,6 @@ app = typer.Typer(
     help="Dynamic pricing training, registry, and monitoring operations.",
     no_args_is_help=True,
 )
-
-MAX_STATISTICAL_INPUT_BYTES = 1_000_000
 
 
 @app.callback()
@@ -87,8 +88,8 @@ def _write_frame(frame: pd.DataFrame, path: Path) -> None:
 def _read_statistical_request(path: Path) -> StatisticalPricingRequest:
     if not path.is_file():
         raise typer.BadParameter("Input file does not exist.")
-    if path.stat().st_size > MAX_STATISTICAL_INPUT_BYTES:
-        raise typer.BadParameter("Input exceeds the 1,000,000-byte limit.")
+    if path.stat().st_size > MAX_STATISTICAL_REQUEST_BYTES:
+        raise typer.BadParameter(f"Input exceeds the {MAX_STATISTICAL_REQUEST_BYTES:,}-byte limit.")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return StatisticalPricingRequest.model_validate(payload)

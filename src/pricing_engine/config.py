@@ -9,6 +9,8 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from pricing_engine.domain.statistical import MAX_STATISTICAL_REQUEST_BYTES
+
 
 class Settings(BaseSettings):
     """Runtime settings.
@@ -40,7 +42,11 @@ class Settings(BaseSettings):
     recommendation_max_concurrency: int = Field(default=4, ge=1, le=64)
     request_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     request_body_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
-    max_request_body_bytes: int = Field(default=524_288, ge=1_024, le=1_048_576)
+    max_request_body_bytes: int = Field(
+        default=MAX_STATISTICAL_REQUEST_BYTES,
+        ge=1_024,
+        le=MAX_STATISTICAL_REQUEST_BYTES,
+    )
 
     @field_validator("api_key", mode="before")
     @classmethod

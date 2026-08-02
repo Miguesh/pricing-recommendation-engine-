@@ -22,7 +22,9 @@ dates/nights/guests, point-in-time-compatible timestamps, unique comparable IDs
 and observation hashes, and exact lineage coverage by `(lineage_hash,
 source_family_id, source_version, observation_hash)`. The consumer is
 responsible for source rights, normalization, comparable selection, and
-similarity construction.
+similarity construction. One request represents one pricing decision, not a
+batch, and contains at most 50 comparables plus 50 matching lineage entries. A
+compact request must fit the shared 1,048,576-byte HTTP/CLI transport boundary.
 
 ## Eligibility sequence
 
@@ -44,9 +46,16 @@ Every exclusion remains visible by comparable ID. An outlier remains in the
 response's audit record even though it is not used for the band. The engine does
 not search for replacement comparables.
 
-If nothing survives the combined recency and individual-similarity pass, v1
-uses `STALE_EVIDENCE` as the top-level abstention while the per-comparable map
-retains each `STALE_EVIDENCE` and/or `LOW_SIMILARITY` reason.
+Normative precedence:
+
+> Cuando no sobrevive evidencia, STALE_EVIDENCE tiene precedencia si al menos
+> una observación fue excluida por recencia; de lo contrario, el resultado
+> superior es LOW_SIMILARITY. El mapa por comparable contiene el diagnóstico
+> completo.
+
+Accordingly, one stale exclusion is sufficient for the top-level stale reason;
+when none is stale, all initial exclusions are low similarity. There is no
+fallback and no `NO_ELIGIBLE_COMPARABLES` reason in contract v1.
 
 ## Weight normalization
 
@@ -149,6 +158,14 @@ rules are:
 | `MODERATE` | used count >= 5, ESS >= 4, average similarity >= 65, dispersion <= 0.60 |
 | `LOW` | recommendation passes all gates but neither higher class applies |
 | `INSUFFICIENT` | response abstains |
+
+All inequalities above are inclusive comparisons against the raw Decimal ESS,
+average similarity, and dispersion values. Classification never reads the
+rounded `evidence_components`. Only response presentation is quantized:
+`effective_sample_size` and `dispersion_ratio` to `0.0001`, and
+`average_similarity` to `0.01`. Consequently, raw dispersion `0.35004` is not
+HIGH even though it serializes as `0.3500`, and raw `0.60004` is not MODERATE
+even though it serializes as `0.6000`.
 
 The response also reports minimum similarity, maximum age, outlier count,
 missing base-rate count, and scenario compatibility. In v1 those fields aid

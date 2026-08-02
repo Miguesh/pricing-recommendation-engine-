@@ -797,6 +797,11 @@
       "ProfileCapability": {
         "additionalProperties": false,
         "properties": {
+          "batch_supported": {
+            "description": "Whether one request may contain multiple pricing decisions.",
+            "title": "Batch Supported",
+            "type": "boolean"
+          },
           "currency_support": {
             "title": "Currency Support",
             "type": "string"
@@ -812,12 +817,50 @@
             "title": "Deterministic",
             "type": "boolean"
           },
+          "effective_request_body_limit_bytes": {
+            "description": "Current API operational limit, which may be lower than the contract maximum.",
+            "minimum": 1024.0,
+            "title": "Effective Request Body Limit Bytes",
+            "type": "integer"
+          },
           "limitations": {
             "items": {
               "type": "string"
             },
             "title": "Limitations",
             "type": "array"
+          },
+          "maximum_comparables": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum comparable observations for one decision, when applicable.",
+            "title": "Maximum Comparables"
+          },
+          "maximum_input_lineage_entries": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum lineage entries for one decision, when applicable.",
+            "title": "Maximum Input Lineage Entries"
+          },
+          "maximum_request_body_bytes": {
+            "description": "Contractual compact-request transport maximum.",
+            "minimum": 1024.0,
+            "title": "Maximum Request Body Bytes",
+            "type": "integer"
           },
           "optional_fields": {
             "items": {
@@ -864,6 +907,9 @@
           "profile",
           "status",
           "version",
+          "maximum_request_body_bytes",
+          "effective_request_body_limit_bytes",
+          "batch_supported",
           "required_fields",
           "optional_fields",
           "limitations",
@@ -1106,6 +1152,7 @@
       },
       "StatisticalPricingRequest": {
         "additionalProperties": false,
+        "description": "One point-in-time pricing decision; analytical batch requests are unsupported.",
         "properties": {
           "algorithm_config_version": {
             "maxLength": 64,
@@ -1132,10 +1179,11 @@
             "type": "boolean"
           },
           "comparables": {
+            "description": "Authorized evidence for this single pricing decision.",
             "items": {
               "$ref": "#/components/schemas/StatisticalComparable"
             },
-            "maxItems": 200,
+            "maxItems": 50,
             "minItems": 1,
             "title": "Comparables",
             "type": "array"
@@ -1174,10 +1222,11 @@
             "type": "integer"
           },
           "input_lineage": {
+            "description": "One governed lineage entry per comparable in this decision.",
             "items": {
               "$ref": "#/components/schemas/LineageEntry"
             },
-            "maxItems": 200,
+            "maxItems": 50,
             "minItems": 1,
             "title": "Input Lineage",
             "type": "array"

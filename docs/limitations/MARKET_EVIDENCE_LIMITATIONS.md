@@ -47,10 +47,13 @@ sparse or biased; abstention gates reduce but do not eliminate that risk.
   or expected-error interval.
 - V1 reports age, minimum similarity, outlier count, and missing base rates,
   but the final quality class uses only used count, ESS, average similarity, and
-  dispersion after eligibility.
-- When no comparable survives combined age/similarity eligibility, the
-  top-level v1 reason is `STALE_EVIDENCE`; consumers should also inspect the
-  per-comparable exclusion map for low-similarity causes.
+  dispersion after eligibility. Those comparisons use raw Decimal values;
+  rounded response components are presentation-only and can straddle a class
+  boundary.
+- When no comparable survives combined age/similarity eligibility,
+  `STALE_EVIDENCE` has top-level precedence if at least one observation was
+  excluded by recency. Otherwise the reason is `LOW_SIMILARITY`. The
+  per-comparable map retains the complete diagnosis, including both reasons.
 
 ## Scenario limitations
 
@@ -103,6 +106,10 @@ ownership. Hashes are not authorization.
   governed logging.
 - The stable and experimental profiles share one API process and endpoint.
   Consumers must select the correct schema and inspect capabilities.
+- One statistical request represents one pricing decision, not a batch. It is
+  limited to 50 comparables, 50 matching lineage entries, and 1,048,576 compact
+  UTF-8 bytes in both supported transports. An explicitly lower API setting is
+  visible in capabilities and can reject a larger contract-valid request.
 - Default statistical readiness does not mean a trained experimental model is
   loaded; model monitoring must use the explicit experimental-profile query.
 - The stable core performs no external access, but process-level egress control

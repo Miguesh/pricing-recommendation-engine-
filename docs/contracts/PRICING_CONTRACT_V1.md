@@ -6,7 +6,8 @@ This document defines JSON contract `1.0` for
 `MARKET_EVIDENCE_STATISTICAL_V1`. The profile converts a bounded set of
 consumer-selected comparable prices into weighted evidence percentiles. It does
 not select evidence, access providers, convert currencies, forecast occupancy,
-optimize revenue, or publish prices.
+optimize revenue, or publish prices. One document represents one point-in-time
+pricing decision; contract v1 does not accept an analytical batch.
 
 The contract is stable for integration while the software remains version
 `0.1.0`. Stability means that semantic behavior is tied to explicit contract,
@@ -62,8 +63,8 @@ self-describing; the parser does not infer them for contract v1.
 | `outlier_policy_version` | string, 1-64 | Outlier inclusion policy |
 | `algorithm_config_version` | string, 1-64 | Behavioral parameter set |
 | `target_property_features` | object | Bounded descriptive target context |
-| `comparables` | array, 1-200 | Already authorized and selected evidence |
-| `input_lineage` | array, 1-200 | Consumer-provided lineage references |
+| `comparables` | array, 1-50 | Already authorized and selected evidence for this decision |
+| `input_lineage` | array, 1-50 | One governed lineage entry per comparable |
 | `publication_allowed` | required literal `false` | Fixed safety flag |
 | `commercial_validation` | required literal `false` | Fixed non-claim flag |
 
@@ -186,6 +187,12 @@ decimal components also serialize as strings. A recommendation always obeys
 `low <= recommendation <= high`; P25/P50/P75 ordering follows from the weighted
 empirical distribution.
 
+Evidence quality is decided from raw Decimal ESS, average similarity, and
+dispersion. The response quantizes ESS and dispersion to four decimal places and
+average similarity to two solely for presentation. Consumers must not
+reclassify a result from those rounded components; for example, raw `0.35004`
+may display as `0.3500` without satisfying the HIGH threshold.
+
 ## Recommendation, abstention, and error
 
 These are distinct outcomes:
@@ -225,6 +232,15 @@ schema validation before algorithm execution.
 
 No profile fallback occurs after either abstention or error.
 
+Normative precedence for the empty initial eligible set:
+
+> Cuando no sobrevive evidencia, STALE_EVIDENCE tiene precedencia si al menos
+> una observación fue excluida por recencia; de lo contrario, el resultado
+> superior es LOW_SIMILARITY. El mapa por comparable contiene el diagnóstico
+> completo.
+
+Contract v1 does not add a generic `NO_ELIGIBLE_COMPARABLES` value.
+
 ## Deterministic identity
 
 Canonical hashing sorts object keys, comparables by `comparable_id`, and lineage
@@ -241,19 +257,26 @@ authorization or replay-prevention mechanism.
 | `GET /health/live` | Process liveness |
 | `GET /health/ready` | Defaults to stable statistical readiness and can succeed without a model |
 | `GET /health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL` | Checks the experimental profile and returns 503 until its model is loaded |
-| `GET /v1/capabilities` | Versioned profile discovery; API key applies when configured |
+| `GET /v1/capabilities` | Versioned profile discovery plus contractual/effective request limits; API key applies when configured |
 | `POST /v1/pricing/recommendations` | Union of statistical and legacy experimental request contracts |
 
 Successful health responses include `checked_profile`, `model_loaded`, and an
 optional `model_version`, so a 200 response is interpreted in the context of the
 profile actually checked.
 
-The POST endpoint applies API-key/organization binding when configured, a
-default 524,288-byte body limit (configurable up to 1,048,576), a body-read
-deadline, a concurrency bulkhead, and a soft execution deadline. A configured
-authorized tenant is compared with statistical `organization_id`. These local
-controls do not replace production identity, TLS, gateway rate limits, or audit
-storage.
+The statistical HTTP and CLI transports share a 1,048,576-byte maximum for the
+compact UTF-8 document. The API setting `PRICING_MAX_REQUEST_BODY_BYTES`
+defaults to that maximum and may be lowered explicitly, never raised above it;
+such an operational reduction can reject a larger contract-valid document and
+is reported as `effective_request_body_limit_bytes`. Capabilities also reports
+`maximum_request_body_bytes=1048576`, `maximum_comparables=50`,
+`maximum_input_lineage_entries=50`, and `batch_supported=false`.
+
+The POST endpoint additionally applies API-key/organization binding when
+configured, a body-read deadline, a concurrency bulkhead, and a soft execution
+deadline. A configured authorized tenant is compared with statistical
+`organization_id`. These local controls do not replace production identity,
+TLS, gateway rate limits, or audit storage.
 
 ## Compatibility policy
 

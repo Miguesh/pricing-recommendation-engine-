@@ -37,7 +37,9 @@ The stable profile receives comparables already authorized, normalized,
 filtered, scored, labeled, and versioned by the consumer. It validates
 compatibility, applies documented eligibility and weighted-outlier policies,
 calculates weighted empirical P25/P50/P75, reports evidence components, and
-either recommends the strategy-specific band point or abstains.
+either recommends the strategy-specific band point or abstains. A request is one
+point-in-time pricing decision, not an analytical batch, and is bounded to 50
+comparables with one matching lineage entry per comparable.
 
 Both contracts share `POST /v1/pricing/recommendations` through an explicit
 request union. `GET /v1/capabilities` exposes profile metadata so consumers do
@@ -45,7 +47,14 @@ not infer requirements from the legacy request. The existing performance-aware
 request and response remain accepted, but this does not promise silent full
 compatibility across health or profile semantics. The CLI adds `validate`,
 `recommend`, `capabilities`, and `export-openapi` operations for the statistical
-profile.
+profile. HTTP and CLI share a 1,048,576-byte statistical request maximum. The
+API can be configured lower; capabilities distinguishes that effective limit
+from the contractual maximum.
+
+Evidence quality compares raw Decimal ESS, average similarity, and dispersion.
+Only the response components are quantized. When the initial eligible set is
+empty, any stale exclusion takes top-level precedence over low similarity while
+the per-comparable map retains all reasons.
 
 The no-query readiness check now means that the stable statistical profile can
 execute. Model availability is reported separately in health fields. An
@@ -70,9 +79,11 @@ boundaries. The software remains pre-1.0 (`0.1.0`).
 | Maximum weighted dispersion `(P75 - P25) / P50` | 1.00 |
 | Maximum evidence age | 90 days |
 | Weighted Tukey IQR multiplier | 1.50 |
-| Maximum comparables per request | 200 |
+| Maximum comparables / lineage entries per request | 50 / 50 |
+| Maximum compact HTTP / CLI request | 1,048,576 bytes |
 | Decimal context precision | 28 digits |
-| Decimal rounding / output quantum | `ROUND_HALF_UP` / `0.01` |
+| Money rounding / output quantum | `ROUND_HALF_UP` / `0.01` |
+| ESS / average similarity / dispersion presentation quantum | `0.0001` / `0.01` / `0.0001` |
 | HIGH quality minimum count / ESS / average similarity | 8 / 6 / 80 |
 | HIGH quality maximum dispersion | 0.35 |
 | MODERATE quality minimum count / ESS / average similarity | 5 / 4 / 65 |
@@ -80,7 +91,8 @@ boundaries. The software remains pre-1.0 (`0.1.0`).
 
 These are transparent engineering policy values, not empirically calibrated
 market thresholds. Changing behavior requires a new configuration or policy
-version rather than an untracked constant change.
+version rather than an untracked constant change. Quality thresholds consume
+raw metrics; the presentation quantums above do not alter policy decisions.
 
 ## Alternatives considered
 

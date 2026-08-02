@@ -17,6 +17,8 @@ from pricing_engine.domain.statistical import (
     DEFAULT_ALGORITHM_CONFIG_VERSION,
     DEFAULT_EVIDENCE_POLICY_VERSION,
     DEFAULT_OUTLIER_POLICY_VERSION,
+    MAX_COMPARABLES,
+    MAX_STATISTICAL_REQUEST_BYTES,
     Abstention,
     AbstentionReason,
     CapabilitiesResponse,
@@ -115,7 +117,10 @@ def effective_sample_size(weights: tuple[Decimal, ...]) -> Decimal:
         return (total * total) / sum((weight * weight for weight in weights), Decimal("0"))
 
 
-def capabilities() -> CapabilitiesResponse:
+def capabilities(
+    *,
+    effective_request_body_limit_bytes: int = MAX_STATISTICAL_REQUEST_BYTES,
+) -> CapabilitiesResponse:
     return CapabilitiesResponse(
         default_profile=EngineProfile.MARKET_EVIDENCE_STATISTICAL_V1,
         profiles=(
@@ -123,6 +128,11 @@ def capabilities() -> CapabilitiesResponse:
                 profile=EngineProfile.MARKET_EVIDENCE_STATISTICAL_V1,
                 status="stable_contract",
                 version="1.0",
+                maximum_request_body_bytes=MAX_STATISTICAL_REQUEST_BYTES,
+                effective_request_body_limit_bytes=effective_request_body_limit_bytes,
+                maximum_comparables=MAX_COMPARABLES,
+                maximum_input_lineage_entries=MAX_COMPARABLES,
+                batch_supported=False,
                 required_fields=(
                     "contract_version",
                     "request_id",
@@ -182,6 +192,7 @@ def capabilities() -> CapabilitiesResponse:
                 ),
                 limitations=(
                     "Consumer selects and authorizes comparables.",
+                    "One request represents one pricing decision, not an analytical batch.",
                     "One currency and one IANA timezone per request; no conversion.",
                     "Evidence quality is not a probability or commercial accuracy claim.",
                     "No forecast, occupancy inference, uplift, or automatic publication.",
@@ -196,6 +207,11 @@ def capabilities() -> CapabilitiesResponse:
                 profile=EngineProfile.PERFORMANCE_AWARE_EXPERIMENTAL,
                 status="experimental",
                 version="0.1.0",
+                maximum_request_body_bytes=MAX_STATISTICAL_REQUEST_BYTES,
+                effective_request_body_limit_bytes=effective_request_body_limit_bytes,
+                maximum_comparables=None,
+                maximum_input_lineage_entries=None,
+                batch_supported=False,
                 required_fields=(
                     "tenant_id",
                     "property_id",
@@ -400,9 +416,13 @@ class MarketEvidenceStatisticalV1:
             else:
                 recent.append(item)
         if not recent and ordered:
-            all_stale = all("STALE_EVIDENCE" in exclusions[item.comparable_id] for item in ordered)
+            has_stale_exclusion = any(
+                AbstentionReason.STALE_EVIDENCE.value in reasons for reasons in exclusions.values()
+            )
             empty_reason = (
-                AbstentionReason.STALE_EVIDENCE if all_stale else AbstentionReason.LOW_SIMILARITY
+                AbstentionReason.STALE_EVIDENCE
+                if has_stale_exclusion
+                else AbstentionReason.LOW_SIMILARITY
             )
             return self._abstain(
                 request,
@@ -494,7 +514,12 @@ class MarketEvidenceStatisticalV1:
             PricingStrategy.PREMIUM: band.high,
         }[request.pricing_strategy]
         components = self._components(request, used, outliers, dispersion)
-        quality = self._quality(components)
+        quality = self._quality(
+            comparable_count_used=len(used),
+            raw_effective_sample_size=sample_size,
+            raw_average_similarity=average_similarity,
+            raw_dispersion_ratio=dispersion,
+        )
         return self._response(
             request=request,
             digest=digest,
@@ -571,7 +596,9 @@ class MarketEvidenceStatisticalV1:
                 else Decimal("0")
             ),
             minimum_similarity=min(weights, default=Decimal("0")),
-            dispersion_ratio=(dispersion.quantize(Decimal("0.0001")) if dispersion else dispersion),
+            dispersion_ratio=(
+                dispersion.quantize(Decimal("0.0001")) if dispersion is not None else None
+            ),
             maximum_age_days=max(self._market_age_days(request, item) for item in used)
             if used
             else 0,
@@ -580,28 +607,29 @@ class MarketEvidenceStatisticalV1:
             scenario_compatible=scenario_compatible,
         )
 
-    def _quality(self, components: EvidenceComponents) -> EvidenceQuality:
-        dispersion = (
-            components.dispersion_ratio
-            if components.dispersion_ratio is not None
-            else Decimal("99")
-        )
-        if components.comparable_count_used < 3:
+    def _quality(
+        self,
+        *,
+        comparable_count_used: int,
+        raw_effective_sample_size: Decimal,
+        raw_average_similarity: Decimal,
+        raw_dispersion_ratio: Decimal | None,
+    ) -> EvidenceQuality:
+        dispersion = raw_dispersion_ratio if raw_dispersion_ratio is not None else Decimal("99")
+        if comparable_count_used < 3:
             return EvidenceQuality.INSUFFICIENT
         if (
-            components.comparable_count_used >= self.config.high_quality_minimum_comparables
-            and components.effective_sample_size
-            >= self.config.high_quality_minimum_effective_sample_size
-            and components.average_similarity >= self.config.high_quality_minimum_average_similarity
+            comparable_count_used >= self.config.high_quality_minimum_comparables
+            and raw_effective_sample_size >= self.config.high_quality_minimum_effective_sample_size
+            and raw_average_similarity >= self.config.high_quality_minimum_average_similarity
             and dispersion <= self.config.high_quality_maximum_dispersion_ratio
         ):
             return EvidenceQuality.HIGH
         if (
-            components.comparable_count_used >= self.config.moderate_quality_minimum_comparables
-            and components.effective_sample_size
+            comparable_count_used >= self.config.moderate_quality_minimum_comparables
+            and raw_effective_sample_size
             >= self.config.moderate_quality_minimum_effective_sample_size
-            and components.average_similarity
-            >= self.config.moderate_quality_minimum_average_similarity
+            and raw_average_similarity >= self.config.moderate_quality_minimum_average_similarity
             and dispersion <= self.config.moderate_quality_maximum_dispersion_ratio
         ):
             return EvidenceQuality.MODERATE

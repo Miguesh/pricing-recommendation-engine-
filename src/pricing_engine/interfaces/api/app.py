@@ -470,7 +470,9 @@ def create_app(
         dependencies=[Depends(authenticate_api_key)],
     )
     async def get_capabilities() -> CapabilitiesResponse:
-        return capabilities()
+        return capabilities(
+            effective_request_body_limit_bytes=resolved_settings.max_request_body_bytes
+        )
 
     @app.get(
         "/health/live",

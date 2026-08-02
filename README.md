@@ -148,6 +148,19 @@ uv run pricing-engine recommend `
 
 The fixture is wholly synthetic and demonstrates the contract only. The
 statistical CLI performs no requests, loads no model, and does not use MLflow.
+Each statistical document represents one point-in-time pricing decision, not an
+analytical batch. It accepts at most 50 comparables and 50 matching lineage
+entries, and its compact UTF-8 body must not exceed 1,048,576 bytes in either
+the HTTP or CLI transport. `capabilities` reports those contractual maxima and,
+for HTTP, any explicitly lower operational body limit.
+
+Evidence quality is classified from raw `Decimal` ESS, average similarity, and
+dispersion values. Only response presentation is quantized (ESS and dispersion
+to four decimal places, average similarity to two). If no evidence survives the
+initial recency/similarity pass, any stale exclusion takes top-level precedence;
+otherwise the reason is low similarity, while the per-comparable map retains
+every diagnosis.
+
 Export the reproducible API schema with:
 
 ```powershell

@@ -69,7 +69,7 @@ deployment principal.
 | Duplicate/replay | Duplicate comparable IDs rejected; deterministic request/run hashes | Requests are not persisted or nonce-checked; consumer owns idempotency and replay controls |
 | Schema smuggling | Pydantic strict objects reject unknown fields; bounded strings/collections; no `eval` or dynamic imports | Union request evolution must be reviewed for ambiguous parsing |
 | Binary-float money/non-finite values | Money accepted only as decimal strings and stored/calculated with `Decimal` | Downstream systems can reintroduce float error; consumer must preserve string/decimal semantics |
-| Payload/compute exhaustion | POST body default 524,288 bytes, configurable ceiling 1,048,576; CLI ceiling 1,000,000; max 200 comparables; read deadline, bulkhead, soft execution timeout | Per-process controls are not distributed rate limits; timed-out native work may continue until completion |
+| Payload/compute exhaustion | Shared HTTP/CLI maximum 1,048,576 bytes; API may be configured lower and reports the effective limit; max 50 comparables and 50 lineage entries per single-decision request; read deadline, bulkhead, soft execution timeout | Per-process controls are not distributed rate limits; a lower operational limit can reject a larger contract-valid document; timed-out native work may continue until completion |
 | Error data leakage | Validation errors keep only type/location/message; internal errors are generic; full payloads are not logged | Human-readable contract details and identifiers still require log access control and retention |
 | Network/provider access | Stable core has no I/O and tests execute without live services | Process-level egress is not denied by the Python type system; deployment should apply network policy |
 | Artifact code execution | Stable profile loads no artifacts; experimental lifecycle checks checksums and governance metadata before joblib loading | Serialized model loading can execute code; registry write permission remains code-deployment authority |
@@ -81,8 +81,13 @@ deployment principal.
 The body limit applies before FastAPI parses the recommendation endpoint. The
 body-read deadline is independent from the soft calculation deadline. A
 per-process semaphore limits concurrent recommendation work. The statistical
-calculation is bounded further by at most 200 comparables and has no external
-waits.
+calculation is bounded further by at most 50 comparables for one pricing
+decision and has no external waits. The CLI uses the same 1,048,576-byte
+constant. Capabilities exposes the contractual maximum and the API's effective
+limit so an operational reduction is observable.
+
+Evidence-class thresholds consume raw Decimal metrics; quantized response
+components cannot elevate a class at a boundary.
 
 Liveness reports process health. Default readiness reports the stable profile
 as ready even when no experimental model is loaded. Callers that need the model

@@ -308,7 +308,10 @@ docker compose logs --tail 200 mlflow
 The recommendation endpoint has two independent deadlines. Body receipt uses
 `PRICING_REQUEST_BODY_TIMEOUT_SECONDS` (default five seconds); if the request
 stream is not received in time, the API returns 408 before inference. Body size
-is independently capped by `PRICING_MAX_REQUEST_BODY_BYTES`.
+is independently capped by `PRICING_MAX_REQUEST_BODY_BYTES`, whose default and
+contractual ceiling are 1,048,576 bytes. A lower value is an explicit
+operational override, appears as `effective_request_body_limit_bytes` in
+capabilities, and may reject a larger contract-valid statistical document.
 
 The container starts one Uvicorn worker. Each process loads its own model and
 SHAP state and owns its own recommendation semaphore, whose default capacity is
