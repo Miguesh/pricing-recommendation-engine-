@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
-
-from pricing_engine.application.recommendation_service import RecommendPrice
+from pricing_engine.application.statistical_service import MarketEvidenceStatisticalV1
 from pricing_engine.config import Settings
 from pricing_engine.domain.exceptions import ModelUnavailableError
-from pricing_engine.domain.policies import PricingPolicy
-from pricing_engine.infrastructure.features import PricingFeatureFactory
-from pricing_engine.infrastructure.model_registry import LocalModelBundleStore, MLflowModelRegistry
-from pricing_engine.infrastructure.models.lightgbm_demand import QuantileLightGBMDemandModel
+
+if TYPE_CHECKING:
+    from pricing_engine.application.recommendation_service import RecommendPrice
+    from pricing_engine.infrastructure.models.lightgbm_demand import QuantileLightGBMDemandModel
 
 
 class ApplicationContainer:
@@ -32,6 +31,7 @@ class ApplicationContainer:
         self._service: RecommendPrice | None = (
             self._build_service(predictor) if predictor is not None else None
         )
+        self._statistical_service = MarketEvidenceStatisticalV1()
 
     @property
     def model_loaded(self) -> bool:
@@ -50,6 +50,12 @@ class ApplicationContainer:
             )
         return self._service
 
+    @property
+    def statistical_service(self) -> MarketEvidenceStatisticalV1:
+        """Return the artifact-free stable profile, which is always available."""
+
+        return self._statistical_service
+
     def load_configured_model(self) -> None:
         """Load only a configured artifact; service never trains at startup."""
 
@@ -59,8 +65,12 @@ class ApplicationContainer:
             return
         uri = self.settings.model_uri
         if Path(uri).exists():
+            from pricing_engine.infrastructure.model_registry import LocalModelBundleStore
+
             predictor = LocalModelBundleStore().load(uri)
         else:
+            from pricing_engine.infrastructure.model_registry import MLflowModelRegistry
+
             predictor = MLflowModelRegistry(
                 tracking_uri=self.settings.mlflow_tracking_uri,
                 dependency_project_path=self.settings.dependency_project_path,
@@ -75,6 +85,8 @@ class ApplicationContainer:
         predictor: QuantileLightGBMDemandModel,
     ) -> None:
         """Reject stale artifacts before the API can report itself ready."""
+
+        from pricing_engine.infrastructure.features import PricingFeatureFactory
 
         expected = tuple(PricingFeatureFactory.FEATURE_COLUMNS)
         actual = tuple(predictor.feature_names)
@@ -110,6 +122,8 @@ class ApplicationContainer:
         """Fail readiness closed and pre-initialize model/SHAP native state."""
 
         try:
+            import pandas as pd
+
             feature_names = tuple(predictor.feature_names)
             row = pd.DataFrame(
                 [{name: predictor.feature_means[name] for name in feature_names}],
@@ -126,6 +140,10 @@ class ApplicationContainer:
             ) from error
 
     def _build_service(self, predictor: QuantileLightGBMDemandModel) -> RecommendPrice:
+        from pricing_engine.application.recommendation_service import RecommendPrice
+        from pricing_engine.domain.policies import PricingPolicy
+        from pricing_engine.infrastructure.features import PricingFeatureFactory
+
         return RecommendPrice(
             predictor=predictor,
             feature_factory=PricingFeatureFactory(),

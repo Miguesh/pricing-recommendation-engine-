@@ -61,15 +61,25 @@ uv run uvicorn pricing_engine.interfaces.api.app:create_app `
   --factory --reload --port 8000
 ```
 
-Validate process and model state:
+Validate process, stable-profile, and model state:
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health/live
 Invoke-RestMethod http://localhost:8000/health/ready
 ```
 
-`/health/live` can return 200 without a model. `/health/ready` must return 503
-until the configured bundle is loaded, then 200 with `model_loaded=true`.
+`/health/live` can return 200 without a model. `/health/ready` returns 200 when
+the artifact-free `MARKET_EVIDENCE_STATISTICAL_V1` profile is available. Inspect
+`model_loaded` and `model_version` separately. Check the model-backed path with:
+
+```powershell
+Invoke-RestMethod `
+  'http://localhost:8000/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL'
+```
+
+That explicit check returns 503 until a configured compatible bundle is loaded
+and warmed. Existing monitors that treated default readiness as a model check
+must migrate to this profile query.
 
 ## Release-quality gate
 
@@ -79,13 +89,21 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv pip check
+uv run pricing-engine validate `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine recommend `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine export-openapi --output docs/openapi.json
+git diff --exit-code -- docs/openapi.json
 uv run pytest --cov=pricing_engine --cov-report=term-missing --cov-report=xml
 uv build --no-sources
 docker compose config --quiet
+docker compose --profile performance-experimental config --quiet
 ```
 
-CI repeats these checks across supported Python versions, clean-installs the
-built wheel, imports production entry points, and then runs a true Docker E2E:
+CI repeats these checks across supported Python versions, validates the stable
+synthetic consumer contract and OpenAPI snapshot, clean-installs the built
+wheel, imports production entry points, and then runs a true Docker E2E:
 it generates demo data inside the API image, retrains/registers a configurable
 model namespace, explicitly promotes it, starts the champion API, submits a
 recommendation, and asserts the proxied artifact location, bundle checksum,
@@ -93,12 +111,21 @@ tenant/currency binding, alias, and untrusted-host rejection.
 
 ## Compose integration platform
 
-Review `.env`, then validate and start the stack:
+The default Compose model starts only the API, which is enough for the stable
+statistical profile:
 
 ```powershell
-docker compose config --quiet
-docker compose --env-file .env up --build --detach
-docker compose ps
+docker compose up --build --detach api
+```
+
+For the separate model/MLflow integration, review `.env`, then validate and
+start the explicit experimental stack:
+
+```powershell
+docker compose --profile performance-experimental config --quiet
+docker compose --profile performance-experimental `
+  --env-file .env up --build --detach
+docker compose --profile performance-experimental ps
 ```
 
 Services:
@@ -115,8 +142,10 @@ Pinned images and credentials in Compose are for local integration only. Use
 managed secrets, TLS, private networking, backups, and maintained services in a
 real environment.
 
-With no `PRICING_MODEL_URI`, the API is intentionally live but not ready. This
-allows orchestration to distinguish process health from serving capability.
+With no `PRICING_MODEL_URI`, the API is live and ready for
+`MARKET_EVIDENCE_STATISTICAL_V1`. The explicit experimental readiness query
+returns 503, allowing orchestration to distinguish stable availability from
+model-backed serving capability.
 
 ## Register and promote a model through MLflow
 
@@ -180,17 +209,22 @@ Configure the API to load the approved alias:
 PRICING_MODEL_URI=models:/pricing-demand@champion
 ```
 
-Recreate only the API and confirm readiness:
+Recreate only the API and confirm experimental model state:
 
 ```powershell
-docker compose up --detach --force-recreate api
-Invoke-RestMethod http://localhost:8000/health/ready
+docker compose --profile performance-experimental `
+  up --detach --force-recreate api
+Invoke-RestMethod `
+  'http://localhost:8000/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL'
 ```
 
 The Compose API overrides `PRICING_MLFLOW_TRACKING_URI` with the internal
 `http://mlflow:5000` address. The API downloads through MLflow's artifact proxy;
 only MLflow accesses the internal MinIO endpoint and credentials. The expected
-ready response contains `model_loaded=true` and the loaded model version.
+experimental health response contains `model_loaded=true` and the loaded model
+version before operators issue an experimental recommendation. A 200 default
+readiness status alone only proves availability of the stable statistical
+profile.
 
 In `PRICING_ENVIRONMENT=production`, configuration fails closed unless
 `PRICING_MODEL_URI` has exactly the governed alias form

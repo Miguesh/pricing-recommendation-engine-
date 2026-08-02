@@ -107,8 +107,11 @@ def test_registry_commands_are_explicit_and_do_not_require_network(
             return Result()
 
     monkeypatch.setattr(cli, "get_settings", lambda: Settings(environment="test"))
-    monkeypatch.setattr(cli, "MLflowModelRegistry", FakeRegistry)
-    monkeypatch.setattr(cli, "RetrainingPipeline", FakePipeline)
+    from pricing_engine.application import retraining_service
+    from pricing_engine.infrastructure import model_registry
+
+    monkeypatch.setattr(model_registry, "MLflowModelRegistry", FakeRegistry)
+    monkeypatch.setattr(retraining_service, "RetrainingPipeline", FakePipeline)
 
     retrain_result = runner.invoke(cli.app, ["retrain", "--input", str(input_path)])
     promote_result = runner.invoke(

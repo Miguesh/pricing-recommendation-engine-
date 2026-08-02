@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     recommendation_max_concurrency: int = Field(default=4, ge=1, le=64)
     request_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     request_body_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
-    max_request_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
+    max_request_body_bytes: int = Field(default=524_288, ge=1_024, le=1_048_576)
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -117,15 +117,14 @@ class Settings(BaseSettings):
                 raise ValueError("api_key must contain at least 32 characters in production.")
             if not self.trusted_hosts:
                 raise ValueError("trusted_hosts must be explicitly configured in production.")
-            if not self.model_uri:
-                raise ValueError("model_uri is required in production.")
-            if not (
+            if self.model_uri is not None and not (
                 self.model_uri.startswith("models:/")
                 and self.model_uri.endswith("@champion")
                 and len(self.model_uri.removeprefix("models:/").removesuffix("@champion")) > 0
             ):
                 raise ValueError(
-                    "Production model_uri must reference a governed MLflow @champion alias."
+                    "When configured, production model_uri must reference a governed "
+                    "MLflow @champion alias."
                 )
             if self.serving_tenant_id is None:
                 raise ValueError("serving_tenant_id is required in production.")

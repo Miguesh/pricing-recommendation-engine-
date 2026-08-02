@@ -1,0 +1,53 @@
+{
+  "contract_version": "1.0",
+  "request_id": "req-synthetic-001",
+  "correlation_id": "corr-synthetic-001",
+  "engine_profile": "MARKET_EVIDENCE_STATISTICAL_V1",
+  "organization_id": "org-synthetic",
+  "audit_id": "audit-synthetic-001",
+  "target_property_id": "property-synthetic-001",
+  "market_id": "market-synthetic-001",
+  "market_config_version": "synthetic-v1",
+  "currency": "COP",
+  "timezone": "America/Bogota",
+  "stay_start": "2026-08-10",
+  "stay_end": "2026-08-12",
+  "number_of_nights": 2,
+  "guests": 2,
+  "observed_at": "2026-07-10T12:00:00-05:00",
+  "as_of": "2026-07-15T12:00:00-05:00",
+  "pricing_strategy": "balanced",
+  "evidence_policy_version": "evidence-quality-v1.0.0",
+  "outlier_policy_version": "weighted-tukey-v1.0.0",
+  "algorithm_config_version": "market-evidence-statistical-v1.0.0",
+  "target_property_features": {
+    "property_type": "apartment",
+    "bedrooms": "1",
+    "bathrooms": "1",
+    "accommodates": 2,
+    "square_meters": "42",
+    "amenity_codes": ["wifi"]
+  },
+  "comparables": [
+    {"comparable_id":"cmp-001","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"100.00","effective_total_nightly_rate":"100.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"1111111111111111111111111111111111111111111111111111111111111111","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-002","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"105.00","effective_total_nightly_rate":"105.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"2222222222222222222222222222222222222222222222222222222222222222","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-003","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"110.00","effective_total_nightly_rate":"110.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"3333333333333333333333333333333333333333333333333333333333333333","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-004","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"115.00","effective_total_nightly_rate":"115.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"4444444444444444444444444444444444444444444444444444444444444444","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-005","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"120.00","effective_total_nightly_rate":"120.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"5555555555555555555555555555555555555555555555555555555555555555","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-006","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"125.00","effective_total_nightly_rate":"125.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"6666666666666666666666666666666666666666666666666666666666666666","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-007","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"130.00","effective_total_nightly_rate":"130.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"7777777777777777777777777777777777777777777777777777777777777777","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"comparable_id":"cmp-008","evidence_type":"manual_observation","verification_level":"analyst_reviewed","collection_method":"manual","observed_at":"2026-07-10T09:00:00-05:00","known_at":"2026-07-10T10:00:00-05:00","stay_start":"2026-08-10","stay_end":"2026-08-12","number_of_nights":2,"guests":2,"currency":"COP","timezone":"America/Bogota","effective_base_nightly_rate":"135.00","effective_total_nightly_rate":"135.00","similarity_score":"90","similarity_factors":{"capacity":"90"},"availability_observed":true,"quality_flags":[],"eligible_for_pricing":true,"source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"8888888888888888888888888888888888888888888888888888888888888888","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  ],
+  "input_lineage": [
+    {"lineage_id":"lineage-synthetic-001","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"1111111111111111111111111111111111111111111111111111111111111111","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-002","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"2222222222222222222222222222222222222222222222222222222222222222","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-003","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"3333333333333333333333333333333333333333333333333333333333333333","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-004","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"4444444444444444444444444444444444444444444444444444444444444444","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-005","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"5555555555555555555555555555555555555555555555555555555555555555","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-006","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"6666666666666666666666666666666666666666666666666666666666666666","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-007","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"7777777777777777777777777777777777777777777777777777777777777777","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"lineage_id":"lineage-synthetic-008","source_family_id":"synthetic-manual","source_version":"v1","observation_hash":"8888888888888888888888888888888888888888888888888888888888888888","lineage_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  ],
+  "publication_allowed": false,
+  "commercial_validation": false
+}

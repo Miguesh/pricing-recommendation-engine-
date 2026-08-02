@@ -1,10 +1,20 @@
 # Architecture
 
-## Primary decision
+## Profile boundary
 
-This service is a constrained demand-and-revenue optimizer, not a regression
-that imitates historic prices. Historic prices are previous policy decisions,
-not optimal labels. The target grain is one pricing snapshot per tenant,
+This service exposes two explicit pricing profiles with different evidence and
+runtime requirements.
+
+- `MARKET_EVIDENCE_STATISTICAL_V1` is the default stable contract. It describes
+  an authorized consumer-selected comparable set with weighted P25/P50/P75,
+  evidence components, and typed abstention. It is pure, deterministic, and
+  loads no model or external service.
+- `PERFORMANCE_AWARE_EXPERIMENTAL` is the preserved constrained demand-and-
+  revenue optimizer. It is not a regression that imitates historic prices and
+  requires operational features plus a governed trained artifact.
+
+Historic prices are previous policy decisions, not optimal labels. For the
+experimental profile, the target grain is one pricing snapshot per tenant,
 property, stay date, and as-of date.
 
 ```text
@@ -22,9 +32,13 @@ information leakage.
 ```mermaid
 flowchart LR
     Client["Consumer application"] --> API["FastAPI v1 adapter"]
-    API --> UseCase["RecommendPrice use case"]
-    UseCase --> Policy["Pricing policy and guardrails"]
-    UseCase --> Features["Versioned feature factory"]
+    API --> Statistical["Stable statistical use case"]
+    Statistical --> Contract["Strict comparable contract"]
+    Contract --> Band["Weighted band / quality / abstention"]
+
+    API --> Experimental["Experimental RecommendPrice"]
+    Experimental --> Policy["Pricing policy and guardrails"]
+    Experimental --> Features["Versioned feature factory"]
     Features --> Model["Monotonic LightGBM demand bundle"]
     Model --> Explain["Cached SHAP explanations"]
     Model --> Optimize["Expected-revenue selection"]
@@ -39,19 +53,48 @@ flowchart LR
 
 | Layer | Responsibility | Must not depend on |
 | --- | --- | --- |
-| `domain` | Value objects, commercial constraints, selection policy | FastAPI, Pandas, MLflow, LightGBM |
-| `application` | Recommendation, training, evaluation, retraining, ports | HTTP delivery and storage details |
+| `domain` | Value objects, statistical contracts, commercial constraints, selection policy | FastAPI, Pandas, MLflow, LightGBM |
+| `application` | Statistical recommendation, experimental recommendation, training, evaluation, retraining, ports | HTTP delivery and storage details |
 | `infrastructure` | Feature engineering, LightGBM, Pandera, MLflow, drift | Route handlers |
 | `interfaces` | FastAPI, CLI, health and telemetry adapters | Concrete training orchestration |
 
-Training is not exposed through HTTP. Serving starts only from a portable local
-bundle or a configured MLflow model URI. Dependency direction points inward:
-infrastructure implements application ports, while domain rules remain pure.
+Training is not exposed through HTTP. The stable statistical service starts
+without any artifact. The experimental service starts only from a portable
+local bundle or a configured MLflow model URI. Dependency direction points
+inward: infrastructure implements application ports, while domain rules remain
+pure.
 The principal ports isolate training-data validation, feature construction,
 model fitting/prediction, candidate registration, and model loading from their
 Pandera, Pandas, LightGBM, filesystem, and MLflow adapters.
 
-## Model and decision flow
+## Stable statistical decision flow
+
+PLUSBNB or another consumer owns source authorization, normalization,
+comparable selection, similarity scoring, and human review. The engine receives
+only opaque identifiers, bounded property context, compatible total nightly
+rates, similarity scores/factors, and lineage references.
+
+For each request, the stable profile:
+
+1. enforces contract, currency, timezone, stay, guest, point-in-time, usability,
+   comparable/observation uniqueness, and exact lineage tuple coverage;
+2. applies versioned 90-day and minimum-individual-similarity eligibility;
+3. preserves and excludes weighted Tukey price outliers;
+4. normalizes similarity weights and checks count, effective sample size,
+   average similarity, and dispersion gates;
+5. calculates left-continuous weighted empirical P25/P50/P75 with `Decimal`;
+6. selects P25, P50, or P75 for conservative, balanced, or premium strategy;
+7. reports evidence components and an ordinal quality class; and
+8. returns a typed abstention instead of a silent fallback when gates fail.
+
+Contract, algorithm configuration, evidence, and outlier policies have separate
+version identifiers. Canonical JSON hashing plus UUIDv5 creates reproducible run
+identity. The calculation performs no I/O, network call, MLflow lookup, model
+load, forecast, or currency conversion. See the
+[statistical ADR](architecture/ADR-market-evidence-statistical-v1.md) and
+[algorithm specification](algorithms/WEIGHTED_PERCENTILE_V1.md).
+
+## Experimental model and decision flow
 
 The bundle fits three LightGBM models:
 
@@ -84,9 +127,10 @@ For each request, the engine:
 The confidence score combines calibrated interval width and feature-space
 support. It is an operational reliability indicator, not booking probability or
 causal certainty. SHAP explains central demand at the selected price; global
-LightGBM importance gives portfolio-level context. SHAP is a required serving
-capability: startup warms prediction and explanation, and readiness fails
-closed if native initialization or explanation fails.
+LightGBM importance gives portfolio-level context. SHAP is a required
+experimental serving capability: startup warms prediction and explanation, and
+the experimental path fails closed if native initialization or explanation
+fails.
 
 ## Feature and data contract
 
@@ -190,8 +234,11 @@ namespace requires a single serialized promotion/rollback writer.
 
 ## Deployment and trust boundaries
 
-- Liveness is independent of model availability; readiness fails until a model
-  is loaded and prediction/SHAP warm-up succeeds.
+- Liveness is independent of model availability. Default readiness succeeds
+  when the stable artifact-free statistical profile is available. The explicit
+  `?profile=PERFORMANCE_AWARE_EXPERIMENTAL` readiness check returns 503 until a
+  compatible model has loaded and prediction/SHAP warm-up succeeds. Health
+  fields report which profile was checked and experimental model availability.
 - Production configuration accepts only a governed
   `models:/<registered-model-name>@champion` URI. Local paths and direct model
   versions remain development/diagnostic options, not production serving
@@ -238,5 +285,6 @@ artifact proxy location, checksum, tenant/currency binding, alias, and
 untrusted-host rejection. This is software E2E evidence, not real-market model
 or causal-policy evidence.
 
-See `docs/model-card.md` for model risk and `docs/runbook.md` for reproducible
-operation.
+See `docs/contracts/PRICING_CONTRACT_V1.md` for the stable statistical contract,
+`docs/model-card.md` for experimental model risk, and `docs/runbook.md` for
+reproducible model-backed operation.

@@ -235,10 +235,13 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_version: str | None = None
+    stable_statistical_profile_ready: bool = True
+    checked_profile: str | None = None
 
 
 class ErrorResponse(BaseModel):
     """Stable public error envelope without internal exception details."""
 
     error: str
+    code: str | None = None
     detail: str | list[dict[str, object]]

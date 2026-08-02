@@ -7,28 +7,32 @@ import sys
 from contextlib import redirect_stdout
 from math import isfinite
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
 import typer
+from pydantic import ValidationError
 
-from pricing_engine.application.retraining_service import RetrainingPipeline
-from pricing_engine.application.training_service import TrainDemandModel
-from pricing_engine.config import get_settings
-from pricing_engine.infrastructure.data_contracts import validate_training_frame
-from pricing_engine.infrastructure.demo_data import generate_demo_observations
-from pricing_engine.infrastructure.features import PricingFeatureFactory
-from pricing_engine.infrastructure.model_registry import LocalModelBundleStore, MLflowModelRegistry
-from pricing_engine.infrastructure.monitoring import build_drift_report
-from pricing_engine.infrastructure.training import (
-    LightGBMDemandModelTrainer,
-    PanderaTrainingDataValidator,
+from pricing_engine.application.statistical_service import (
+    MarketEvidenceStatisticalV1,
+    capabilities,
+    request_hash,
 )
+from pricing_engine.config import get_settings
+from pricing_engine.domain.exceptions import StatisticalContractError
+from pricing_engine.domain.statistical import StatisticalPricingRequest
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from pricing_engine.application.training_service import TrainDemandModel
 
 app = typer.Typer(
     name="pricing-engine",
     help="Dynamic pricing training, registry, and monitoring operations.",
     no_args_is_help=True,
 )
+
+MAX_STATISTICAL_INPUT_BYTES = 1_000_000
 
 
 @app.callback()
@@ -44,6 +48,13 @@ def configure_console_encoding() -> None:
 def _build_training_service() -> TrainDemandModel:
     """Compose application training ports at the CLI boundary."""
 
+    from pricing_engine.application.training_service import TrainDemandModel
+    from pricing_engine.infrastructure.features import PricingFeatureFactory
+    from pricing_engine.infrastructure.training import (
+        LightGBMDemandModelTrainer,
+        PanderaTrainingDataValidator,
+    )
+
     return TrainDemandModel(
         validator=PanderaTrainingDataValidator(),
         feature_factory=PricingFeatureFactory(),
@@ -52,6 +63,8 @@ def _build_training_service() -> TrainDemandModel:
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
+    import pandas as pd
+
     if not path.exists():
         raise typer.BadParameter(f"Input file does not exist: {path}")
     if path.suffix.lower() == ".parquet":
@@ -71,6 +84,73 @@ def _write_frame(frame: pd.DataFrame, path: Path) -> None:
         raise typer.BadParameter("Output must be a .csv or .parquet file.")
 
 
+def _read_statistical_request(path: Path) -> StatisticalPricingRequest:
+    if not path.is_file():
+        raise typer.BadParameter("Input file does not exist.")
+    if path.stat().st_size > MAX_STATISTICAL_INPUT_BYTES:
+        raise typer.BadParameter("Input exceeds the 1,000,000-byte limit.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return StatisticalPricingRequest.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError) as error:
+        raise typer.BadParameter(
+            "Input is not a valid statistical contract v1 document."
+        ) from error
+
+
+@app.command("capabilities")
+def show_capabilities() -> None:
+    """Print discoverable engine profiles without loading models or external services."""
+
+    typer.echo(capabilities().model_dump_json(indent=2))
+
+
+@app.command("validate")
+def validate_statistical_contract(
+    input: Path = typer.Option(..., help="Statistical contract v1 JSON document."),
+) -> None:
+    """Validate a stable statistical request without producing a recommendation."""
+
+    request = _read_statistical_request(input)
+    try:
+        MarketEvidenceStatisticalV1().validate(request)
+    except StatisticalContractError as error:
+        typer.echo(json.dumps({"valid": False, "code": error.code}), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps({"valid": True, "request_hash": request_hash(request)}, indent=2))
+
+
+@app.command("recommend")
+def recommend_statistical_price(
+    input: Path = typer.Option(..., help="Statistical contract v1 JSON document."),
+) -> None:
+    """Run the pure MARKET_EVIDENCE_STATISTICAL_V1 profile."""
+
+    request = _read_statistical_request(input)
+    try:
+        response = MarketEvidenceStatisticalV1().recommend(request)
+    except StatisticalContractError as error:
+        typer.echo(json.dumps({"error": "StatisticalContractError", "code": error.code}), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(response.model_dump_json(indent=2))
+
+
+@app.command("export-openapi")
+def export_openapi(
+    output: Path = typer.Option(Path("docs/openapi.json"), help="OpenAPI JSON destination."),
+) -> None:
+    """Export the deterministic API schema without starting the server."""
+
+    from pricing_engine.config import Settings
+    from pricing_engine.interfaces.api.app import create_app
+
+    schema_settings = Settings.model_construct(environment="test")
+    schema = create_app(schema_settings).openapi()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    typer.echo(json.dumps({"output": str(output), "openapi": schema["openapi"]}, indent=2))
+
+
 @app.command("generate-demo-data")
 def generate_demo_data(
     output: Path = typer.Option(..., help="Destination CSV or Parquet file."),
@@ -79,6 +159,8 @@ def generate_demo_data(
     seed: int = typer.Option(42),
 ) -> None:
     """Create deterministic non-production data for an end-to-end demonstration."""
+
+    from pricing_engine.infrastructure.demo_data import generate_demo_observations
 
     frame = generate_demo_observations(
         properties=properties,
@@ -103,6 +185,8 @@ def train(
     ),
 ) -> None:
     """Train locally, evaluate chronologically, and persist a portable bundle."""
+
+    from pricing_engine.infrastructure.model_registry import LocalModelBundleStore
 
     outcome = _build_training_service().execute(_read_frame(input))
     bundle = LocalModelBundleStore().save_local(outcome.model, output)
@@ -132,6 +216,9 @@ def retrain(
     registered_model_name: str = typer.Option("pricing-demand"),
 ) -> None:
     """Train and register a gated candidate. This never changes the champion alias."""
+
+    from pricing_engine.application.retraining_service import RetrainingPipeline
+    from pricing_engine.infrastructure.model_registry import MLflowModelRegistry
 
     settings = get_settings()
     registry = MLflowModelRegistry(
@@ -188,6 +275,8 @@ def promote(
 ) -> None:
     """Set the MLflow champion alias after an explicit human approval."""
 
+    from pricing_engine.infrastructure.model_registry import MLflowModelRegistry
+
     settings = get_settings()
     with redirect_stdout(sys.stderr):
         MLflowModelRegistry(
@@ -205,6 +294,8 @@ def rollback(
     registered_model_name: str = typer.Option("pricing-demand"),
 ) -> None:
     """Restore a superseded model version without bypassing governance checks."""
+
+    from pricing_engine.infrastructure.model_registry import MLflowModelRegistry
 
     settings = get_settings()
     with redirect_stdout(sys.stderr):
@@ -228,6 +319,10 @@ def drift(
     threshold: float = typer.Option(0.20, min=0.01, max=1.0),
 ) -> None:
     """Report population stability drift over the immutable feature contract."""
+
+    from pricing_engine.infrastructure.data_contracts import validate_training_frame
+    from pricing_engine.infrastructure.features import PricingFeatureFactory
+    from pricing_engine.infrastructure.monitoring import build_drift_report
 
     factory = PricingFeatureFactory()
     reference_features = factory.build_training_features(

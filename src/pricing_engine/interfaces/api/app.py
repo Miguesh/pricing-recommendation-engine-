@@ -22,12 +22,19 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from pricing_engine.application.statistical_service import capabilities
 from pricing_engine.config import Settings, get_settings
 from pricing_engine.domain.exceptions import (
     ModelUnavailableError,
     PricingEngineError,
+    StatisticalContractError,
 )
-from pricing_engine.domain.policies import PricingPolicy
+from pricing_engine.domain.statistical import (
+    CapabilitiesResponse,
+    EngineProfile,
+    StatisticalPricingRequest,
+    StatisticalPricingResponse,
+)
 from pricing_engine.interfaces.api.container import ApplicationContainer
 from pricing_engine.interfaces.api.schemas import (
     ErrorResponse,
@@ -312,9 +319,15 @@ def create_app(
             if isinstance(error, ModelUnavailableError)
             else str(error)
         )
+        content: dict[str, object] = {
+            "error": error.__class__.__name__,
+            "detail": detail,
+        }
+        if isinstance(error, StatisticalContractError):
+            content["code"] = error.code
         return JSONResponse(
             status_code=response_status,
-            content={"error": error.__class__.__name__, "detail": detail},
+            content=content,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -431,12 +444,17 @@ def create_app(
         return normalized_tenant
 
     def authorize_pricing_request(
-        payload: PricingRecommendationRequest,
+        payload: PricingRecommendationRequest | StatisticalPricingRequest,
         authorized_tenant: str | None,
     ) -> None:
         """Enforce object-level tenant authorization before inference."""
 
-        if authorized_tenant is not None and payload.tenant_id != authorized_tenant:
+        requested_tenant = (
+            payload.tenant_id
+            if isinstance(payload, PricingRecommendationRequest)
+            else payload.organization_id
+        )
+        if authorized_tenant is not None and requested_tenant != authorized_tenant:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Caller is not authorized for the requested tenant.",
@@ -444,6 +462,15 @@ def create_app(
 
     def get_container(request: Request) -> ApplicationContainer:
         return cast(ApplicationContainer, request.app.state.container)
+
+    @app.get(
+        "/v1/capabilities",
+        response_model=CapabilitiesResponse,
+        tags=["pricing"],
+        dependencies=[Depends(authenticate_api_key)],
+    )
+    async def get_capabilities() -> CapabilitiesResponse:
+        return capabilities()
 
     @app.get(
         "/health/live",
@@ -466,16 +493,22 @@ def create_app(
         tags=["operations"],
     )
     async def readiness(
+        profile: EngineProfile = EngineProfile.MARKET_EVIDENCE_STATISTICAL_V1,
         container_dependency: ApplicationContainer = Depends(get_container),
     ) -> HealthResponse:
-        if not container_dependency.model_loaded:
+        if (
+            profile is EngineProfile.PERFORMANCE_AWARE_EXPERIMENTAL
+            and not container_dependency.model_loaded
+        ):
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Model not loaded."
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The experimental performance-aware profile has no loaded model.",
             )
         return HealthResponse(
             status="ready",
-            model_loaded=True,
+            model_loaded=container_dependency.model_loaded,
             model_version=container_dependency.model_version,
+            checked_profile=profile,
         )
 
     @app.get(
@@ -489,7 +522,7 @@ def create_app(
 
     @app.post(
         RECOMMENDATION_PATH,
-        response_model=PricingRecommendationResponse,
+        response_model=PricingRecommendationResponse | StatisticalPricingResponse,
         responses={
             status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
             status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
@@ -503,13 +536,32 @@ def create_app(
     )
     async def recommend_price(
         request: Request,
-        payload: PricingRecommendationRequest,
+        payload: PricingRecommendationRequest | StatisticalPricingRequest,
         authorized_tenant: str | None = Depends(resolve_authorized_tenant),
         container_dependency: ApplicationContainer = Depends(get_container),
-    ) -> PricingRecommendationResponse:
+    ) -> PricingRecommendationResponse | StatisticalPricingResponse:
         authorize_pricing_request(payload, authorized_tenant)
+        tenant_id = (
+            payload.tenant_id
+            if isinstance(payload, PricingRecommendationRequest)
+            else payload.organization_id
+        )
+        property_id = (
+            payload.property_id
+            if isinstance(payload, PricingRecommendationRequest)
+            else payload.target_property_id
+        )
+        safe_log_context = (
+            {"tenant_id": tenant_id, "property_id": property_id}
+            if isinstance(payload, PricingRecommendationRequest)
+            else {"profile": payload.engine_profile.value}
+        )
 
-        def execute_recommendation() -> PricingRecommendationResponse:
+        def execute_recommendation() -> PricingRecommendationResponse | StatisticalPricingResponse:
+            if isinstance(payload, StatisticalPricingRequest):
+                return container_dependency.statistical_service.recommend(payload)
+            from pricing_engine.domain.policies import PricingPolicy
+
             context = payload.to_domain()
             service = container_dependency.recommendation_service
             recommendation = service.execute(context)
@@ -538,8 +590,7 @@ def create_app(
             logger.warning(
                 "pricing_recommendation_capacity_timed_out",
                 request_id=request.state.request_id,
-                tenant_id=payload.tenant_id,
-                property_id=payload.property_id,
+                **safe_log_context,
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -547,7 +598,7 @@ def create_app(
                 headers={"Retry-After": "1"},
             ) from error
 
-        async def execute_with_slot() -> PricingRecommendationResponse:
+        async def execute_with_slot() -> PricingRecommendationResponse | StatisticalPricingResponse:
             try:
                 return await run_in_threadpool(execute_recommendation)
             finally:
@@ -557,7 +608,9 @@ def create_app(
 
         recommendation_task = asyncio.create_task(execute_with_slot())
 
-        def observe_late_completion(task: asyncio.Task[PricingRecommendationResponse]) -> None:
+        def observe_late_completion(
+            task: asyncio.Task[PricingRecommendationResponse | StatisticalPricingResponse],
+        ) -> None:
             try:
                 task.result()
             except Exception as error:
@@ -577,8 +630,7 @@ def create_app(
             logger.warning(
                 "pricing_recommendation_timed_out",
                 request_id=request.state.request_id,
-                tenant_id=payload.tenant_id,
-                property_id=payload.property_id,
+                **safe_log_context,
             )
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -588,16 +640,29 @@ def create_app(
             recommendation_task.add_done_callback(observe_late_completion)
             raise
 
-        logger.info(
-            "pricing_recommendation_issued",
-            request_id=request.state.request_id,
-            tenant_id=payload.tenant_id,
-            property_id=payload.property_id,
-            stay_date=payload.stay_date.isoformat(),
-            model_version=response.model_version,
-            recommended_price=str(response.recommended_price),
-            confidence_score=response.confidence_score,
-        )
+        if isinstance(response, StatisticalPricingResponse):
+            logger.info(
+                "statistical_pricing_recommendation_completed",
+                request_id=request.state.request_id,
+                profile=EngineProfile.MARKET_EVIDENCE_STATISTICAL_V1,
+                status=response.status,
+                evidence_quality=response.evidence_quality,
+            )
+        else:
+            logger.info(
+                "pricing_recommendation_issued",
+                request_id=request.state.request_id,
+                tenant_id=tenant_id,
+                property_id=property_id,
+                stay_date=(
+                    payload.stay_date.isoformat()
+                    if isinstance(payload, PricingRecommendationRequest)
+                    else payload.stay_start.isoformat()
+                ),
+                model_version=response.model_version,
+                recommended_price=str(response.recommended_price),
+                confidence_score=response.confidence_score,
+            )
         return response
 
     return app

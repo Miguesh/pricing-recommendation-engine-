@@ -56,6 +56,14 @@ jobs:
         if: matrix.python-version == '3.12'
         run: uv run mypy src
 
+      - name: Stable statistical contract and OpenAPI snapshot
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run pricing-engine validate --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+          uv run pricing-engine recommend --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json > "${RUNNER_TEMP}/statistical-response.json"
+          uv run pricing-engine export-openapi --output "${RUNNER_TEMP}/openapi.json"
+          diff --unified docs/openapi.json "${RUNNER_TEMP}/openapi.json"
+
       - name: Dependency consistency
         run: uv pip check
 
@@ -133,6 +141,7 @@ jobs:
       - name: Smoke-test image entry points
         run: |
           docker run --rm --entrypoint python pricing-recommendation-engine-api:local -c "from pricing_engine.cli import app; from pricing_engine.interfaces.api.app import create_app; assert app and create_app"
+          docker run --rm pricing-recommendation-engine-api:local pricing-engine capabilities
           test "$(docker run --rm --entrypoint uv pricing-recommendation-engine-api:local --version)" = "uv ${UV_VERSION}"
           docker run --rm --entrypoint mlflow pricing-recommendation-engine-mlflow:local --version
 

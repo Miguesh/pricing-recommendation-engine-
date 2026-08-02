@@ -17,6 +17,7 @@ services:
     depends_on:
       mlflow:
         condition: service_healthy
+        required: false
     volumes:
       - ./artifacts:/app/artifacts:ro
     init: true
@@ -31,6 +32,7 @@ services:
     restart: unless-stopped
 
   postgres:
+    profiles: ["performance-experimental"]
     image: postgres:16.14-alpine3.24
     environment:
       POSTGRES_DB: mlflow
@@ -46,6 +48,7 @@ services:
     restart: unless-stopped
 
   minio:
+    profiles: ["performance-experimental"]
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z
     command: server /data --console-address ":9001"
     environment:
@@ -64,6 +67,7 @@ services:
     restart: unless-stopped
 
   create-bucket:
+    profiles: ["performance-experimental"]
     image: minio/mc:RELEASE.2025-07-21T05-28-08Z
     depends_on:
       minio:
@@ -83,6 +87,7 @@ services:
       - ALL
 
   mlflow:
+    profiles: ["performance-experimental"]
     image: pricing-recommendation-engine-mlflow:local
     build:
       context: .

@@ -70,11 +70,15 @@ def test_recommendation_contract_requires_auth_and_returns_explanation(training_
     assert response.headers["X-Request-ID"] == "request-123"
 
 
-def test_readiness_is_unavailable_without_an_approved_model() -> None:
+def test_readiness_reports_stable_profile_without_an_approved_model() -> None:
     settings = Settings(environment="test")
     with TestClient(create_app(settings)) as client:
         live_response = client.get("/health/live")
         response = client.get("/health/ready")
+        experimental_response = client.get(
+            "/health/ready",
+            params={"profile": "PERFORMANCE_AWARE_EXPERIMENTAL"},
+        )
         recommendation_response = client.post("/v1/pricing/recommendations", json=_payload())
         invalid_payload = _payload()
         invalid_payload["constraints"] = {
@@ -85,7 +89,15 @@ def test_readiness_is_unavailable_without_an_approved_model() -> None:
         validation_response = client.post("/v1/pricing/recommendations", json=invalid_payload)
 
     assert live_response.status_code == 200
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "model_loaded": False,
+        "model_version": None,
+        "stable_statistical_profile_ready": True,
+        "checked_profile": "MARKET_EVIDENCE_STATISTICAL_V1",
+    }
+    assert experimental_response.status_code == 503
     assert recommendation_response.status_code == 503
     assert validation_response.status_code == 422
 
@@ -108,14 +120,14 @@ def test_production_settings_fail_closed_and_blank_local_key_is_unconfigured() -
             api_key_tenant_id="demo-tenant",
             trusted_hosts=["api.example.com"],
         )
-    with pytest.raises(ValidationError, match="model_uri"):
-        Settings(
-            environment="production",
-            api_key=SecretStr(PRODUCTION_API_KEY),
-            api_key_tenant_id="demo-tenant",
-            serving_tenant_id="demo-tenant",
-            trusted_hosts=["api.example.com"],
-        )
+    statistical_only = Settings(
+        environment="production",
+        api_key=SecretStr(PRODUCTION_API_KEY),
+        api_key_tenant_id="demo-tenant",
+        serving_tenant_id="demo-tenant",
+        trusted_hosts=["api.example.com"],
+    )
+    assert statistical_only.model_uri is None
 
 
 def test_production_security_controls_and_tenant_binding(training_outcome) -> None:

@@ -19,3 +19,11 @@ class ModelUnavailableError(PricingEngineError):
 
 class PromotionRejectedError(PricingEngineError):
     """A candidate model did not meet the version-promotion policy."""
+
+
+class StatisticalContractError(PricingEngineError):
+    """A MARKET_EVIDENCE_STATISTICAL_V1 request violates its stable contract."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        self.code = code
+        super().__init__(detail)
