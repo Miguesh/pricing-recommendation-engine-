@@ -125,6 +125,8 @@ def test_openapi_exposes_capabilities_and_both_pricing_contracts() -> None:
     assert "StatisticalPricingResponse" in schema["components"]["schemas"]
     assert "PricingRecommendationRequest" in schema["components"]["schemas"]
     assert len(request_schema["anyOf"]) == 2
+    assert recommendation["responses"]["413"]["description"] == "Content Too Large"
+    assert recommendation["responses"]["422"]["description"] == "Unprocessable Content"
 
 
 def test_cli_validate_recommend_capabilities_and_export_openapi(tmp_path: Path) -> None:

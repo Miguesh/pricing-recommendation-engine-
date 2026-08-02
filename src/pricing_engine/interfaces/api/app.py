@@ -527,8 +527,14 @@ def create_app(
             status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse},
             status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
             status.HTTP_408_REQUEST_TIMEOUT: {"model": ErrorResponse},
-            status.HTTP_413_CONTENT_TOO_LARGE: {"model": ErrorResponse},
-            status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
+            status.HTTP_413_CONTENT_TOO_LARGE: {
+                "model": ErrorResponse,
+                "description": "Content Too Large",
+            },
+            status.HTTP_422_UNPROCESSABLE_CONTENT: {
+                "model": ErrorResponse,
+                "description": "Unprocessable Content",
+            },
             status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
             status.HTTP_504_GATEWAY_TIMEOUT: {"model": ErrorResponse},
         },
