@@ -1,4 +1,10 @@
-# Model Card: Pricing Demand and Revenue Optimizer
+# Model Card: Experimental Pricing Demand and Revenue Optimizer
+
+This card applies only to `PERFORMANCE_AWARE_EXPERIMENTAL`. The default
+`MARKET_EVIDENCE_STATISTICAL_V1` profile is a deterministic descriptive
+algorithm, not a trained model; its contract, evidence policy, and limitations
+are documented separately in `docs/contracts/PRICING_CONTRACT_V1.md` and
+`docs/limitations/MARKET_EVIDENCE_LIMITATIONS.md`.
 
 ## Model details
 
@@ -170,3 +176,7 @@ This model card documents the software and evaluation contract, not a specific
 production model approval. Each registered model version must carry its own
 dataset fingerprint, metrics, feature version, approver, and deployment record
 in MLflow or the organization's governed model registry.
+
+An approval of an experimental model version does not validate, calibrate, or
+authorize the statistical profile, and a statistical evidence-quality class is
+not model confidence or model approval.

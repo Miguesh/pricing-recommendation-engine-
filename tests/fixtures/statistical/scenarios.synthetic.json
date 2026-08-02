@@ -1,0 +1,91 @@
+{
+  "catalog_version": "1.0",
+  "base_fixture": "plusbnb-consumer.synthetic.json",
+  "synthetic_only": true,
+  "disclaimer": "Constructed test values only; not observations from any real property or market.",
+  "scenarios": [
+    {
+      "id": "balanced",
+      "expectation": "recommended",
+      "pricing_strategy": "balanced"
+    },
+    {
+      "id": "conservative",
+      "expectation": "recommended",
+      "pricing_strategy": "conservative"
+    },
+    {
+      "id": "premium",
+      "expectation": "recommended",
+      "pricing_strategy": "premium"
+    },
+    {
+      "id": "insufficient_evidence",
+      "expectation": "abstained",
+      "expected_reason": "INSUFFICIENT_COMPARABLES",
+      "comparable_limit": 2
+    },
+    {
+      "id": "high_dispersion",
+      "expectation": "abstained",
+      "expected_reason": "EXCESSIVE_DISPERSION",
+      "comparable_limit": 4,
+      "total_rates": ["10.00", "100.00", "200.00", "300.00"]
+    },
+    {
+      "id": "low_similarity",
+      "expectation": "abstained",
+      "expected_reason": "LOW_SIMILARITY",
+      "comparable_limit": 4,
+      "similarity_scores": ["50", "50", "50", "50"]
+    },
+    {
+      "id": "outliers",
+      "expectation": "recommended",
+      "append_outlier": true
+    },
+    {
+      "id": "duplicates",
+      "expectation": "contract_error",
+      "expected_code": "DUPLICATE_COMPARABLE",
+      "duplicate_first_comparable": true
+    },
+    {
+      "id": "incompatible_currency",
+      "expectation": "contract_error",
+      "expected_code": "CURRENCY_MISMATCH",
+      "first_comparable_currency": "USD"
+    },
+    {
+      "id": "incompatible_timezone",
+      "expectation": "contract_error",
+      "expected_code": "TIMEZONE_MISMATCH",
+      "first_comparable_timezone": "UTC"
+    },
+    {
+      "id": "future_observation",
+      "expectation": "contract_error",
+      "expected_code": "TEMPORAL_INCOMPATIBILITY",
+      "first_observed_at": "2026-07-16T09:00:00-05:00",
+      "first_known_at": "2026-07-16T10:00:00-05:00"
+    },
+    {
+      "id": "incomplete_lineage",
+      "expectation": "contract_error",
+      "expected_code": "INVALID_LINEAGE",
+      "drop_last_lineage": true
+    },
+    {
+      "id": "total_charges",
+      "expectation": "recommended",
+      "base_rates_null": true
+    },
+    {
+      "id": "concentrated_effective_sample",
+      "expectation": "abstained",
+      "expected_reason": "LOW_EFFECTIVE_SAMPLE_SIZE",
+      "comparable_limit": 3,
+      "similarity_scores": ["100", "40", "40"]
+    }
+  ]
+}

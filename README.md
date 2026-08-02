@@ -4,16 +4,25 @@
 [![Python 3.11–3.13](https://img.shields.io/badge/python-3.11%E2%80%933.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A production-oriented dynamic-pricing recommendation service for nightly
-rentals. It estimates occupancy over a policy-constrained price grid and returns
-the price that maximizes expected nightly revenue, together with calibrated
-uncertainty, confidence, SHAP drivers, global importance, and model lineage.
+A pricing decision-support service for nightly rentals with two deliberately
+separate profiles. The default stable integration profile turns an authorized,
+consumer-selected comparable set into a deterministic weighted pricing band.
+The retained experimental profile estimates occupancy over a constrained price
+grid and uses a governed trained model to maximize expected nightly revenue.
 
 > **Project status:** pre-1.0 reference implementation. The software path is
 > tested with deterministic synthetic data; the repository does not claim
 > real-world revenue uplift or production deployment evidence.
 
-## Why this is not a price-regression demo
+| Profile | Contract status | Inputs and dependencies | Intended use |
+| --- | --- | --- | --- |
+| `MARKET_EVIDENCE_STATISTICAL_V1` | Stable contract `1.0`; default | Authorized normalized comparable prices and similarity weights; no artifacts, MLflow, occupancy, booking pace, or external access | Analyst-reviewed evidence band and typed abstention; initial PLUSBNB integration |
+| `PERFORMANCE_AWARE_EXPERIMENTAL` | Experimental; preserved | Occupancy/booking-pace context and a governed LightGBM/SHAP artifact | Model-backed demand/revenue experimentation; not the initial PLUSBNB profile |
+
+The stable profile reports evidence quality, not a probability that a price is
+correct. Neither profile authorizes automatic publication.
+
+## Why the experimental profile is not a price-regression demo
 
 Historical prices are decisions made by an earlier policy, not optimal labels.
 Regressing directly to them would reproduce that policy and its bias. This
@@ -33,10 +42,11 @@ observational data does not identify causal price elasticity.
 
 | Concern | Implementation |
 | --- | --- |
-| Point-in-time correctness | Mandatory `as_of_date` and `outcome_available_date`, duplicate-snapshot checks, purged chronological partitions, optional embargo |
+| Artifact-free evidence profile | Strict contract v1, `Decimal` money, weighted P25/P50/P75, explicit gates, typed abstention, deterministic lineage |
+| Point-in-time correctness | Statistical `known_at`/`observed_at` cutoffs plus experimental `as_of_date`/`outcome_available_date`, duplicate-snapshot checks, purged chronological partitions, optional embargo |
 | Economic consistency | Negative monotonic constraints on price signals and deterministic lower-price tie-breaking |
 | Uncertainty | Quantile tails with group-conformal calibration, simultaneous stay-level coverage, and quantile-order repair |
-| Explainability | Cached local SHAP explanations plus normalized global importance; readiness fails closed if SHAP warm-up fails |
+| Experimental explainability | Cached local SHAP explanations plus normalized global importance; the experimental path fails closed if SHAP warm-up fails |
 | Model risk | Equal-stay-weighted fitting/evaluation plus aggregate, revenue, calibration, required-slice, policy-grid, and same-holdout challenger/champion gates |
 | Reproducibility | `uv.lock`, clean-wheel CI, supported-Python matrix, explicitly versioned container bases |
 | Lifecycle | MLflow candidates, dataset fingerprints, semantic feature hashes, SHA-256 artifact integrity, immutable tenant/currency binding, explicit promotion and rollback |
@@ -47,16 +57,21 @@ observational data does not identify causal price elasticity.
 
 ```mermaid
 flowchart LR
-    Client["Revenue-management client"] --> API["FastAPI /v1"]
-    API --> UseCase["RecommendPrice"]
-    UseCase --> Policy["Commercial guardrails"]
-    UseCase --> Features["Feature contract v2"]
+    Client["Pricing consumer"] --> API["FastAPI /v1"]
+    API --> Statistical["MARKET_EVIDENCE_STATISTICAL_V1"]
+    Statistical --> Validate["Strict evidence contract"]
+    Validate --> Percentiles["Weighted P25 / P50 / P75"]
+    Percentiles --> Review["Band, quality, or abstention"]
+
+    API --> Experimental["PERFORMANCE_AWARE_EXPERIMENTAL"]
+    Experimental --> Policy["Commercial guardrails"]
+    Experimental --> Features["Feature contract v2"]
     Features --> Demand["Monotonic LightGBM demand bundle"]
     Demand --> Revenue["Expected-revenue optimizer"]
     Demand --> SHAP["SHAP and confidence"]
 
-    Data["Point-in-time observations"] --> Contract["Pandera validation"]
-    Contract --> Split["Purged temporal partitions"]
+    Data["Experimental training observations"] --> TrainingContract["Pandera validation"]
+    TrainingContract --> Split["Purged temporal partitions"]
     Split --> Train["Train, group-conformal calibrate, test"]
     Train --> Gates["Quality and slice gates"]
     Gates --> Registry["MLflow candidate"]
@@ -71,8 +86,8 @@ The source follows Clean Architecture:
 
 ```text
 src/pricing_engine/
-├── domain/          # Immutable business models, constraints, pricing policy
-├── application/     # Recommendation, training, evaluation, retraining, ports
+├── domain/          # Immutable contracts, business models, constraints, policy
+├── application/     # Statistical/model recommendation, training, evaluation, ports
 ├── infrastructure/  # Features, Pandera, LightGBM, MLflow, drift, demo data
 └── interfaces/      # FastAPI and CLI delivery adapters
 ```
@@ -80,7 +95,7 @@ src/pricing_engine/
 Domain code does not depend on FastAPI, Pandas, LightGBM, or MLflow. Training is
 an offline workflow and is never exposed as an API endpoint.
 
-## Model design
+## Experimental model design
 
 The demand bundle contains:
 
@@ -114,17 +129,80 @@ The registered-model namespace is immutably bound to that tenant/currency pair;
 use a separately trained and registered model, deployment, and authenticated
 routing boundary for every other tenant or currency.
 
-## Quick start
+## Statistical profile quick start
 
 Prerequisites: Python 3.11–3.13 and
 [`uv`](https://docs.astral.sh/uv/). Docker Desktop is needed only for the full
-integration platform.
+experimental integration platform.
 
 PowerShell:
 
 ```powershell
-Copy-Item .env.example .env
 uv sync --locked --extra dev --python 3.12
+uv run pricing-engine capabilities
+uv run pricing-engine validate `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine recommend `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+```
+
+The fixture is wholly synthetic and demonstrates the contract only. The
+statistical CLI performs no requests, loads no model, and does not use MLflow.
+Each statistical document represents one point-in-time pricing decision, not an
+analytical batch. It accepts at most 50 comparables and 50 matching lineage
+entries, and its compact UTF-8 body must not exceed 1,048,576 bytes in either
+the HTTP or CLI transport. `capabilities` reports those contractual maxima and,
+for HTTP, any explicitly lower operational body limit.
+The CLI opens the input as binary, reads at most 1,048,577 bytes, enforces the
+size limit before strict UTF-8 decoding, and returns one redacted validation
+error for invalid encoding, JSON, schema content, or file reads.
+For the stable profile, `required_fields` is a complete recursive inventory of
+required envelope, target-feature, comparable, and lineage paths. Contract
+tests derive that inventory from the Pydantic JSON Schema so a newly required
+field cannot silently drift from capabilities.
+
+Evidence quality is classified from raw `Decimal` ESS, average similarity, and
+dispersion values. Only response presentation is quantized (ESS and dispersion
+to four decimal places, average similarity to two). If no evidence survives the
+initial recency/similarity pass, any stale exclusion takes top-level precedence;
+otherwise the reason is low similarity, while the per-comparable map retains
+every diagnosis.
+
+Export the reproducible API schema with:
+
+```powershell
+uv run pricing-engine export-openapi --output docs/openapi.json
+```
+
+Start the API without a model artifact:
+
+```powershell
+uv run uvicorn pricing_engine.interfaces.api.app:create_app `
+  --factory --reload --port 8000
+```
+
+`/health/ready` defaults to the stable statistical profile and returns 200
+without a model. Use
+`/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL` when model readiness is
+required; it returns 503 until an artifact is loaded. Discover exact contract
+requirements at `/v1/capabilities`.
+
+An ordinary failure while the optional experimental artifact is loaded,
+validated, warmed, or attached to its service leaves the process and stable
+profile operational. The experimental profile remains unavailable and its
+explicit readiness and recommendation paths fail closed with 503; requests are
+never rerouted to the stable profile.
+
+See the [contract](docs/contracts/PRICING_CONTRACT_V1.md),
+[weighted algorithm](docs/algorithms/WEIGHTED_PERCENTILE_V1.md), and
+[PLUSBNB consumer guide](docs/integrations/PLUSBNB_CONSUMER_GUIDE.md).
+
+## Experimental profile quick start
+
+The model-backed workflow is separate and remains pre-production:
+
+```powershell
+Copy-Item .env.example .env
 uv run pricing-engine generate-demo-data `
   --output data/demo/observations.parquet
 uv run pricing-engine train `
@@ -138,20 +216,31 @@ Set the bundle in `.env`:
 PRICING_MODEL_URI=artifacts/local-model
 ```
 
-Start the API:
-
-```powershell
-uv run uvicorn pricing_engine.interfaces.api.app:create_app `
-  --factory --reload --port 8000
-```
-
-Open `http://localhost:8000/docs`. Liveness is available at
-`/health/live`; `/health/ready` returns 503 until a model is loaded.
+Restart the API after configuring the bundle. Experimental recommendations
+remain unavailable until a governed compatible model is loaded even though the
+default stable statistical readiness check succeeds. Legacy model monitors must
+migrate to the explicit experimental-profile readiness query.
 
 ## API example
 
-`POST /v1/pricing/recommendations` accepts one property/stay-date decision. If
-`PRICING_API_KEY` is configured, also send `X-API-Key`.
+`POST /v1/pricing/recommendations` accepts either the statistical contract v1
+or the retained performance-aware request. A statistical request must name
+`MARKET_EVIDENCE_STATISTICAL_V1`; the complete safe example lives at
+`tests/fixtures/statistical/plusbnb-consumer.synthetic.json`. Its response
+contains decimal-string band/recommendation fields, evidence components,
+received/used/excluded comparable IDs, outliers, warnings, abstention, and
+lineage. Every distinct `(lineage_hash, source_family_id, source_version,
+observation_hash)` tuple must exactly cover the comparable evidence. No silent
+fallback crosses profiles.
+
+If `PRICING_API_KEY` is configured, send `X-API-Key`; when identity binding is
+configured, statistical `organization_id` must match it. Statistical
+organization identity is trimmed at the boundary, must be 1-128 characters, and
+must match `^[A-Za-z0-9][A-Za-z0-9._:-]*$` across the public contract, API-key
+binding, serving-tenant binding, and trusted-proxy value. The retained
+experimental request keeps its separate 100-character `tenant_id` wire limit.
+
+The following legacy example illustrates the preserved model-backed API:
 
 ```json
 {
@@ -248,8 +337,9 @@ The local integration platform provides PostgreSQL metadata, MinIO artifacts,
 MLflow, and the API:
 
 ```powershell
-docker compose config --quiet
-docker compose --env-file .env up --build --detach
+docker compose --profile performance-experimental config --quiet
+docker compose --profile performance-experimental `
+  --env-file .env up --build --detach
 ```
 
 Compose uses MLflow's artifact proxy, so host commands and the API do not need
@@ -289,8 +379,10 @@ approval, deployment decision, tenant/currency binding, feature contract, and
 matching run/version checksum before downloading an immutable model version.
 
 ```powershell
-docker compose up --detach --force-recreate api
-Invoke-RestMethod http://localhost:8000/health/ready
+docker compose --profile performance-experimental `
+  up --detach --force-recreate api
+Invoke-RestMethod `
+  'http://localhost:8000/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL'
 ```
 
 When a compatible champion exists, retraining loads it and evaluates both
@@ -315,9 +407,16 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv pip check
+uv run pricing-engine validate `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine recommend `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine export-openapi --output docs/openapi.json
+git diff --exit-code -- docs/openapi.json
 uv run pytest --cov=pricing_engine --cov-report=term-missing --cov-report=xml
 uv build --no-sources
 docker compose config --quiet
+docker compose --profile performance-experimental config --quiet
 ```
 
 CI additionally:
@@ -325,6 +424,8 @@ CI additionally:
 - tests Python 3.11, 3.12, and 3.13;
 - enforces the 85% branch-aware coverage threshold;
 - runs Ruff security rules and strict MyPy;
+- validates the synthetic statistical consumer contract and checks the
+  reproducible OpenAPI snapshot;
 - builds both source and wheel distributions;
 - clean-installs the wheel and imports production entry points;
 - builds and smoke-tests the API and MLflow images without external secrets;
@@ -343,7 +444,13 @@ CI additionally:
 | `src/pricing_engine/infrastructure` | Data contracts, features, model, registry, monitoring |
 | `src/pricing_engine/interfaces` | REST API and CLI adapters |
 | `tests` | Domain, contract, model, API, registry, CLI, drift, and retraining tests |
+| `tests/fixtures/statistical` | Wholly synthetic statistical consumer-contract examples |
 | `docs/architecture.md` | System design and dependency boundaries |
+| `docs/contracts` | Stable statistical JSON contract semantics |
+| `docs/algorithms` | Versioned weighted calculation and policy parameters |
+| `docs/integrations` | Consumer responsibilities and PLUSBNB integration workflow |
+| `docs/security` | Trust boundaries, threats, controls, and residual risks |
+| `docs/limitations` | Explicit statistical and commercial non-claims |
 | `docs/model-card.md` | Intended use, evaluation, uncertainty, and model risk |
 | `docs/runbook.md` | Local operation, promotion, monitoring, and rollback |
 | `docs/adr` | Consequential architecture decisions |
@@ -352,6 +459,12 @@ CI additionally:
 ## Known limitations and next evidence required
 
 - Real-market quality has not been evaluated in this repository.
+- Statistical v1 thresholds and evidence classes are transparent engineering
+  policy, not commercially calibrated accuracy or confidence.
+- Statistical v1 trusts consumer authorization, normalization, comparable
+  selection, scoring, and hash/lineage truthfulness.
+- Statistical strategies select weighted percentiles; they do not forecast
+  occupancy, optimize revenue, convert currency, or authorize publication.
 - The coherent synthetic demo is integration evidence, not causal proof.
 - Real data and multi-year rolling backtests across market regimes are still
   required; the single deterministic holdout is not sufficient evidence.
@@ -370,6 +483,13 @@ CI additionally:
 ## Documentation and governance
 
 - [Architecture](docs/architecture.md)
+- [Statistical profile ADR](docs/architecture/ADR-market-evidence-statistical-v1.md)
+- [Pricing contract v1](docs/contracts/PRICING_CONTRACT_V1.md)
+- [Weighted percentile v1](docs/algorithms/WEIGHTED_PERCENTILE_V1.md)
+- [PLUSBNB consumer guide](docs/integrations/PLUSBNB_CONSUMER_GUIDE.md)
+- [Statistical profile limitations](docs/limitations/MARKET_EVIDENCE_LIMITATIONS.md)
+- [Threat model](docs/security/THREAT_MODEL.md)
+- [Changelog](CHANGELOG.md)
 - [Model card](docs/model-card.md)
 - [Operations runbook](docs/runbook.md)
 - [ADR 001: demand-response optimization](docs/adr/001-demand-response-optimization.md)

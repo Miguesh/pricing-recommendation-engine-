@@ -48,6 +48,11 @@ unencodable third-party output), including on Windows consoles. Keep redirected
 JSON/log files UTF-8; a legacy terminal font may still fail to render some
 Unicode glyphs even though the emitted bytes are valid.
 
+Statistical `validate` and `recommend` open the request in binary mode, read only
+the 1,048,576-byte maximum plus one byte, apply the size check first, then decode
+strict UTF-8. Invalid encoding, JSON, schema, or file reads return the same
+redacted validation error; oversized input keeps its explicit size error.
+
 Set the local bundle in `.env`:
 
 ```dotenv
@@ -61,15 +66,43 @@ uv run uvicorn pricing_engine.interfaces.api.app:create_app `
   --factory --reload --port 8000
 ```
 
-Validate process and model state:
+Validate process, stable-profile, and model state:
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health/live
 Invoke-RestMethod http://localhost:8000/health/ready
 ```
 
-`/health/live` can return 200 without a model. `/health/ready` must return 503
-until the configured bundle is loaded, then 200 with `model_loaded=true`.
+`/health/live` can return 200 without a model. `/health/ready` returns 200 when
+the artifact-free `MARKET_EVIDENCE_STATISTICAL_V1` profile is available. Inspect
+`model_loaded` and `model_version` separately. Check the model-backed path with:
+
+```powershell
+Invoke-RestMethod `
+  'http://localhost:8000/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL'
+```
+
+That explicit check returns 503 until a configured compatible bundle is loaded
+and warmed. Existing monitors that treated default readiness as a model check
+must migrate to this profile query.
+
+The co-hosted experimental profile is optional at startup. Its predictor and
+service are published only after load, contract validation, prediction/SHAP
+warm-up, and service construction all succeed. An ordinary failure leaves
+liveness, stable readiness, capabilities, and stable recommendations
+operational; experimental readiness and legacy recommendation remain 503 with
+no fallback. Internally, absence of a configured URI maps to `NOT_CONFIGURED`,
+success to `READY`, and initialization failure to `UNAVAILABLE` with bounded
+code `MODEL_LOAD_FAILED`.
+The warning event records only that bounded state/code and exception type, not
+the URI, artifact detail, credentials, or request identity.
+
+Before enabling statistical tenant binding, migrate any reused legacy tenant
+configuration that contains spaces, `/`, `@`, non-ASCII text, or forbidden
+leading punctuation to an opaque 1-128 character identifier matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`. Surrounding whitespace is trimmed; forbidden
+characters are rejected rather than rewritten. This configuration migration
+does not alter the legacy request's independent 100-character wire schema.
 
 ## Release-quality gate
 
@@ -79,13 +112,21 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv pip check
+uv run pricing-engine validate `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine recommend `
+  --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
+uv run pricing-engine export-openapi --output docs/openapi.json
+git diff --exit-code -- docs/openapi.json
 uv run pytest --cov=pricing_engine --cov-report=term-missing --cov-report=xml
 uv build --no-sources
 docker compose config --quiet
+docker compose --profile performance-experimental config --quiet
 ```
 
-CI repeats these checks across supported Python versions, clean-installs the
-built wheel, imports production entry points, and then runs a true Docker E2E:
+CI repeats these checks across supported Python versions, validates the stable
+synthetic consumer contract and OpenAPI snapshot, clean-installs the built
+wheel, imports production entry points, and then runs a true Docker E2E:
 it generates demo data inside the API image, retrains/registers a configurable
 model namespace, explicitly promotes it, starts the champion API, submits a
 recommendation, and asserts the proxied artifact location, bundle checksum,
@@ -93,12 +134,21 @@ tenant/currency binding, alias, and untrusted-host rejection.
 
 ## Compose integration platform
 
-Review `.env`, then validate and start the stack:
+The default Compose model starts only the API, which is enough for the stable
+statistical profile:
 
 ```powershell
-docker compose config --quiet
-docker compose --env-file .env up --build --detach
-docker compose ps
+docker compose up --build --detach api
+```
+
+For the separate model/MLflow integration, review `.env`, then validate and
+start the explicit experimental stack:
+
+```powershell
+docker compose --profile performance-experimental config --quiet
+docker compose --profile performance-experimental `
+  --env-file .env up --build --detach
+docker compose --profile performance-experimental ps
 ```
 
 Services:
@@ -115,8 +165,17 @@ Pinned images and credentials in Compose are for local integration only. Use
 managed secrets, TLS, private networking, backups, and maintained services in a
 real environment.
 
-With no `PRICING_MODEL_URI`, the API is intentionally live but not ready. This
-allows orchestration to distinguish process health from serving capability.
+With no `PRICING_MODEL_URI`, the API is live and ready for
+`MARKET_EVIDENCE_STATISTICAL_V1`. The explicit experimental readiness query
+returns 503, allowing orchestration to distinguish stable availability from
+model-backed serving capability.
+
+If a configured experimental artifact is inaccessible, incompatible, cannot
+warm prediction/SHAP, or cannot construct its service, the same stable endpoints
+remain available. Inspect the explicit experimental readiness result and the
+redacted `experimental_profile_initialization_failed` warning; correct the
+artifact or configuration and restart rather than routing legacy traffic to the
+stable contract.
 
 ## Register and promote a model through MLflow
 
@@ -180,17 +239,24 @@ Configure the API to load the approved alias:
 PRICING_MODEL_URI=models:/pricing-demand@champion
 ```
 
-Recreate only the API and confirm readiness:
+Recreate only the API and confirm experimental model state:
 
 ```powershell
-docker compose up --detach --force-recreate api
-Invoke-RestMethod http://localhost:8000/health/ready
+docker compose --profile performance-experimental `
+  up --detach --force-recreate api
+Invoke-RestMethod `
+  'http://localhost:8000/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL'
 ```
 
 The Compose API overrides `PRICING_MLFLOW_TRACKING_URI` with the internal
 `http://mlflow:5000` address. The API downloads through MLflow's artifact proxy;
 only MLflow accesses the internal MinIO endpoint and credentials. The expected
-ready response contains `model_loaded=true` and the loaded model version.
+experimental health response contains `model_loaded=true` and the loaded model
+version before operators issue an experimental recommendation. A 200 default
+readiness status alone only proves availability of the stable statistical
+profile. A 503 experimental result alongside 200 stable readiness is a supported
+degraded state, not permission to substitute one profile's response for the
+other.
 
 In `PRICING_ENVIRONMENT=production`, configuration fails closed unless
 `PRICING_MODEL_URI` has exactly the governed alias form
@@ -274,7 +340,10 @@ docker compose logs --tail 200 mlflow
 The recommendation endpoint has two independent deadlines. Body receipt uses
 `PRICING_REQUEST_BODY_TIMEOUT_SECONDS` (default five seconds); if the request
 stream is not received in time, the API returns 408 before inference. Body size
-is independently capped by `PRICING_MAX_REQUEST_BODY_BYTES`.
+is independently capped by `PRICING_MAX_REQUEST_BODY_BYTES`, whose default and
+contractual ceiling are 1,048,576 bytes. A lower value is an explicit
+operational override, appears as `effective_request_body_limit_bytes` in
+capabilities, and may reject a larger contract-valid statistical document.
 
 The container starts one Uvicorn worker. Each process loads its own model and
 SHAP state and owns its own recommendation semaphore, whose default capacity is

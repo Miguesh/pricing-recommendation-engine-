@@ -9,6 +9,12 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from pricing_engine.domain.statistical import (
+    MAX_STATISTICAL_IDENTITY_LENGTH,
+    MAX_STATISTICAL_REQUEST_BYTES,
+    STATISTICAL_IDENTIFIER_PATTERN,
+)
+
 
 class Settings(BaseSettings):
     """Runtime settings.
@@ -20,6 +26,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PRICING_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     environment: Literal["local", "test", "staging", "production"] = "local"
@@ -27,8 +34,18 @@ class Settings(BaseSettings):
     api_title: str = "Pricing Recommendation Engine"
     api_version: str = "0.1.0"
     api_key: SecretStr | None = None
-    api_key_tenant_id: str | None = Field(default=None, min_length=1, max_length=100)
-    serving_tenant_id: str | None = Field(default=None, min_length=1, max_length=100)
+    api_key_tenant_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+        pattern=STATISTICAL_IDENTIFIER_PATTERN,
+    )
+    serving_tenant_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+        pattern=STATISTICAL_IDENTIFIER_PATTERN,
+    )
     trusted_hosts: list[str] = Field(default_factory=list)
     trust_proxy_identity: bool = False
     trusted_tenant_header: str | None = Field(default=None, min_length=1, max_length=100)
@@ -40,7 +57,11 @@ class Settings(BaseSettings):
     recommendation_max_concurrency: int = Field(default=4, ge=1, le=64)
     request_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     request_body_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
-    max_request_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
+    max_request_body_bytes: int = Field(
+        default=MAX_STATISTICAL_REQUEST_BYTES,
+        ge=1_024,
+        le=MAX_STATISTICAL_REQUEST_BYTES,
+    )
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -53,13 +74,20 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("api_key_tenant_id", "serving_tenant_id", "trusted_tenant_header")
+    @field_validator(
+        "api_key_tenant_id",
+        "serving_tenant_id",
+        "trusted_tenant_header",
+        mode="before",
+    )
     @classmethod
-    def normalize_optional_identity_value(cls, value: str | None) -> str | None:
+    def normalize_optional_identity_value(cls, value: object) -> object:
         """Normalize security identifiers and reject whitespace-only values."""
 
         if value is None:
-            return None
+            return value
+        if not isinstance(value, str):
+            raise ValueError("Security identity values must be strings.")
         normalized = value.strip()
         if not normalized:
             raise ValueError("Security identity values cannot be blank.")
@@ -117,15 +145,14 @@ class Settings(BaseSettings):
                 raise ValueError("api_key must contain at least 32 characters in production.")
             if not self.trusted_hosts:
                 raise ValueError("trusted_hosts must be explicitly configured in production.")
-            if not self.model_uri:
-                raise ValueError("model_uri is required in production.")
-            if not (
+            if self.model_uri is not None and not (
                 self.model_uri.startswith("models:/")
                 and self.model_uri.endswith("@champion")
                 and len(self.model_uri.removeprefix("models:/").removesuffix("@champion")) > 0
             ):
                 raise ValueError(
-                    "Production model_uri must reference a governed MLflow @champion alias."
+                    "When configured, production model_uri must reference a governed "
+                    "MLflow @champion alias."
                 )
             if self.serving_tenant_id is None:
                 raise ValueError("serving_tenant_id is required in production.")
