@@ -40,6 +40,11 @@ All envelope fields below are required. Profile, policy versions, and both
 fixed-false safety flags must be explicit so stored audits remain
 self-describing; the parser does not infer them for contract v1.
 
+Fields described below as statistical identifiers trim surrounding whitespace,
+contain 1-128 characters, and match
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`. In particular, the first character is ASCII
+alphanumeric; later characters may additionally use `.`, `_`, `:`, or `-`.
+
 | Field | Type and constraints | Meaning |
 | --- | --- | --- |
 | `contract_version` | literal `1.0` | Input schema version |
@@ -271,6 +276,12 @@ Successful health responses include `checked_profile`, `model_loaded`, and an
 optional `model_version`, so a 200 response is interpreted in the context of the
 profile actually checked.
 
+The optional experimental predictor and service become visible only after
+artifact loading, contract validation, prediction/explanation warm-up, and
+service construction all succeed. An ordinary failure during those steps does
+not prevent stable-profile startup: explicit experimental readiness and legacy
+experimental recommendation remain 503, with no cross-profile fallback.
+
 The statistical HTTP and CLI transports share a 1,048,576-byte maximum for the
 compact UTF-8 document. The API setting `PRICING_MAX_REQUEST_BODY_BYTES`
 defaults to that maximum and may be lowered explicitly, never raised above it;
@@ -279,15 +290,21 @@ is reported as `effective_request_body_limit_bytes`. Capabilities also reports
 `maximum_request_body_bytes=1048576`, `maximum_comparables=50`,
 `maximum_input_lineage_entries=50`, and `batch_supported=false`.
 
+The CLI opens its input in binary mode and reads at most 1,048,577 bytes. It
+checks size before decoding with strict UTF-8. Invalid encoding, JSON, schema, or
+file reads produce the same redacted contract-validation error; oversized input
+retains its distinct size error.
+
 The POST endpoint additionally applies API-key/organization binding when
 configured, a body-read deadline, a concurrency bulkhead, and a soft execution
 deadline. A configured authorized tenant is compared with statistical
 `organization_id`. After surrounding whitespace normalization, the statistical
-identity maximum is 128 characters in the contract, `api_key_tenant_id`,
-`serving_tenant_id`, and trusted-proxy header value; a longer configured or
-supplied identity fails closed. The name of the trusted header retains its
-separate HTTP-field-name constraint. These local controls do not replace
-production identity, TLS, gateway rate limits, or audit storage.
+identity grammar `^[A-Za-z0-9][A-Za-z0-9._:-]*$` and 1-128 character bound apply
+identically to the contract, `api_key_tenant_id`, `serving_tenant_id`, and
+trusted-proxy header value; any invalid configured or supplied identity fails
+closed. The name of the trusted header retains its separate HTTP-field-name
+constraint. These local controls do not replace production identity, TLS,
+gateway rate limits, or audit storage.
 
 ## Compatibility policy
 
@@ -304,4 +321,6 @@ missing model must migrate to the explicit experimental-profile query above.
 This is a documented compatibility migration, not an assertion of silent full
 compatibility. The experimental request's `tenant_id` and `property_id` remain
 bounded to 100 characters; widening statistical authentication configuration
-does not change that legacy wire contract.
+and enforcing the statistical identifier grammar do not change that legacy wire
+contract. Legacy consumers should migrate deliberately rather than assuming the
+new statistical identity grammar applies to their payload.

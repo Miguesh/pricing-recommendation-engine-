@@ -48,6 +48,11 @@ unencodable third-party output), including on Windows consoles. Keep redirected
 JSON/log files UTF-8; a legacy terminal font may still fail to render some
 Unicode glyphs even though the emitted bytes are valid.
 
+Statistical `validate` and `recommend` open the request in binary mode, read only
+the 1,048,576-byte maximum plus one byte, apply the size check first, then decode
+strict UTF-8. Invalid encoding, JSON, schema, or file reads return the same
+redacted validation error; oversized input keeps its explicit size error.
+
 Set the local bundle in `.env`:
 
 ```dotenv
@@ -80,6 +85,24 @@ Invoke-RestMethod `
 That explicit check returns 503 until a configured compatible bundle is loaded
 and warmed. Existing monitors that treated default readiness as a model check
 must migrate to this profile query.
+
+The co-hosted experimental profile is optional at startup. Its predictor and
+service are published only after load, contract validation, prediction/SHAP
+warm-up, and service construction all succeed. An ordinary failure leaves
+liveness, stable readiness, capabilities, and stable recommendations
+operational; experimental readiness and legacy recommendation remain 503 with
+no fallback. Internally, absence of a configured URI maps to `NOT_CONFIGURED`,
+success to `READY`, and initialization failure to `UNAVAILABLE` with bounded
+code `MODEL_LOAD_FAILED`.
+The warning event records only that bounded state/code and exception type, not
+the URI, artifact detail, credentials, or request identity.
+
+Before enabling statistical tenant binding, migrate any reused legacy tenant
+configuration that contains spaces, `/`, `@`, non-ASCII text, or forbidden
+leading punctuation to an opaque 1-128 character identifier matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`. Surrounding whitespace is trimmed; forbidden
+characters are rejected rather than rewritten. This configuration migration
+does not alter the legacy request's independent 100-character wire schema.
 
 ## Release-quality gate
 
@@ -146,6 +169,13 @@ With no `PRICING_MODEL_URI`, the API is live and ready for
 `MARKET_EVIDENCE_STATISTICAL_V1`. The explicit experimental readiness query
 returns 503, allowing orchestration to distinguish stable availability from
 model-backed serving capability.
+
+If a configured experimental artifact is inaccessible, incompatible, cannot
+warm prediction/SHAP, or cannot construct its service, the same stable endpoints
+remain available. Inspect the explicit experimental readiness result and the
+redacted `experimental_profile_initialization_failed` warning; correct the
+artifact or configuration and restart rather than routing legacy traffic to the
+stable contract.
 
 ## Register and promote a model through MLflow
 
@@ -224,7 +254,9 @@ only MLflow accesses the internal MinIO endpoint and credentials. The expected
 experimental health response contains `model_loaded=true` and the loaded model
 version before operators issue an experimental recommendation. A 200 default
 readiness status alone only proves availability of the stable statistical
-profile.
+profile. A 503 experimental result alongside 200 stable readiness is a supported
+degraded state, not permission to substitute one profile's response for the
+other.
 
 In `PRICING_ENVIRONMENT=production`, configuration fails closed unless
 `PRICING_MODEL_URI` has exactly the governed alias form

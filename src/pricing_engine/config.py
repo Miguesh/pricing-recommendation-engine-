@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pricing_engine.domain.statistical import (
     MAX_STATISTICAL_IDENTITY_LENGTH,
     MAX_STATISTICAL_REQUEST_BYTES,
+    STATISTICAL_IDENTIFIER_PATTERN,
 )
 
 
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PRICING_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     environment: Literal["local", "test", "staging", "production"] = "local"
@@ -36,11 +38,13 @@ class Settings(BaseSettings):
         default=None,
         min_length=1,
         max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+        pattern=STATISTICAL_IDENTIFIER_PATTERN,
     )
     serving_tenant_id: str | None = Field(
         default=None,
         min_length=1,
         max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
+        pattern=STATISTICAL_IDENTIFIER_PATTERN,
     )
     trusted_hosts: list[str] = Field(default_factory=list)
     trust_proxy_identity: bool = False
@@ -80,8 +84,10 @@ class Settings(BaseSettings):
     def normalize_optional_identity_value(cls, value: object) -> object:
         """Normalize security identifiers and reject whitespace-only values."""
 
-        if not isinstance(value, str):
+        if value is None:
             return value
+        if not isinstance(value, str):
+            raise ValueError("Security identity values must be strings.")
         normalized = value.strip()
         if not normalized:
             raise ValueError("Security identity values cannot be blank.")

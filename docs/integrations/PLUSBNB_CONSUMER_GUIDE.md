@@ -67,6 +67,10 @@ uv run pricing-engine recommend `
   --input tests/fixtures/statistical/plusbnb-consumer.synthetic.json
 ```
 
+Both CLI commands read at most 1,048,577 bytes in binary mode, reject an
+oversized document before strict UTF-8 decoding, and return a redacted contract
+error for invalid encoding, JSON, schema, or file reads.
+
 Regenerate the OpenAPI document for contract review:
 
 ```powershell
@@ -95,9 +99,10 @@ treated as a Medellín baseline, market quote, or production default.
    dates, nights, and guests exactly in v1; send exactly one matching lineage
    entry per comparable, also capped at 50.
 7. Create opaque organization/property/source identifiers. Statistical
-   `organization_id` may contain at most 128 characters and must be identical to
-   the authenticated organization binding. Never serialize display names,
-   addresses, coordinates, listing URLs, calendar URLs, or raw source records.
+   identifiers trim surrounding whitespace, contain 1-128 characters, and match
+   `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. `organization_id` must be identical to the
+   authenticated organization binding. Never serialize display names, addresses,
+   coordinates, listing URLs, calendar URLs, or raw source records.
 8. Send required `availability_observed` as a boolean or null, and send
    `quality_flags` explicitly (an empty array is valid).
 9. Send decimal money as JSON strings and explicit profile/policy versions.
@@ -136,11 +141,11 @@ Invoke-RestMethod `
 If `PRICING_API_KEY` is configured, add `X-API-Key`. In a bound deployment,
 the authenticated tenant/organization must equal `organization_id`; a mismatch
 returns 403. API-key binding, serving-tenant routing, and a trusted-proxy
-identity all accept the statistical contract maximum of 128 characters and
-reject longer values without echoing them. This does not widen the separate
-legacy experimental `tenant_id` maximum of 100. Production also requires TLS,
-gateway controls, managed secrets, and an externally auditable identity
-binding.
+identity all use the same trimmed 1-128 character statistical grammar and reject
+invalid values without echoing them. This does not alter the separate legacy
+experimental `tenant_id` maximum of 100 or its wire grammar. Production also
+requires TLS, gateway controls, managed secrets, and an externally auditable
+identity binding.
 
 `GET /health/ready` confirms that the stable statistical profile can execute
 and is expected to return 200 without a model. To check the model-backed path,
@@ -149,6 +154,11 @@ call
 the artifact has loaded, then reports `model_loaded=true`. Existing model
 monitors must migrate to the explicit query rather than interpreting default
 readiness.
+
+If experimental artifact loading, contract validation, warm-up, or service
+construction fails, the API still starts and serves the stable profile. The
+experimental readiness and legacy recommendation paths remain 503, and PLUSBNB
+must not treat stable availability as an experimental fallback.
 
 ## Interpret a successful recommendation
 
@@ -218,9 +228,11 @@ Do not use a hash as evidence of source permission or as a digital signature.
 - [ ] `GET /v1/capabilities` advertises the stable profile, exact versions,
       50/50 collection maxima, 1,048,576-byte contract maximum, effective HTTP
       limit, `batch_supported=false`, and all required nested schema paths.
-- [ ] Statistical identities through 128 characters authenticate through the
-      selected API-key or trusted-proxy binding; 129-character values fail
-      closed and the legacy request remains bounded to 100.
+- [ ] Statistical identities matching
+      `^[A-Za-z0-9][A-Za-z0-9._:-]*$` through 128 characters authenticate
+      through the selected API-key, serving-tenant, or trusted-proxy binding;
+      invalid or 129-character values fail closed and the legacy request remains
+      bounded to 100 without a wire change.
 - [ ] The checked-in synthetic fixture validates and recommends with no model
       URI or external service.
 - [ ] PLUSBNB rejects or quarantines PII/private URLs before serialization.
@@ -241,6 +253,9 @@ Do not use a hash as evidence of source permission or as a digital signature.
 - [ ] Contract tests pin OpenAPI and the synthetic consumer fixture.
 - [ ] Monitoring uses the explicit experimental readiness query when model
       availability matters.
+- [ ] Simulated experimental initialization failure leaves stable readiness and
+      recommendation operational while experimental paths remain 503 without
+      fallback.
 - [ ] The integration makes no accuracy, forecast, uplift, revenue, or
       commercial-validation claim.
 

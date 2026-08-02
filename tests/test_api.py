@@ -1,23 +1,34 @@
 """Contract tests for the public pricing API."""
 
 import asyncio
+import json
 from copy import copy
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
+import pricing_engine.interfaces.api.container as container_module
 from pricing_engine.config import Settings
 from pricing_engine.domain.exceptions import ModelUnavailableError
+from pricing_engine.infrastructure.model_registry import MLflowModelRegistry
 from pricing_engine.interfaces.api.app import (
     RECOMMENDATION_PATH,
     RequestBodyLimitMiddleware,
     create_app,
 )
-from pricing_engine.interfaces.api.container import ApplicationContainer
+from pricing_engine.interfaces.api.container import (
+    ApplicationContainer,
+    ExperimentalProfileFailureCode,
+    ExperimentalProfileState,
+)
 from pricing_engine.interfaces.api.schemas import PricingRecommendationRequest
 
 PRODUCTION_API_KEY = "production-key-with-at-least-32-characters"
+STATISTICAL_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "statistical" / "plusbnb-consumer.synthetic.json"
+)
 
 
 def _payload() -> dict[str, object]:
@@ -44,6 +55,53 @@ def _payload() -> dict[str, object]:
     }
 
 
+def _statistical_payload() -> dict[str, object]:
+    return json.loads(STATISTICAL_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _assert_experimental_failure_is_isolated(
+    client: TestClient,
+    *,
+    api_key: str | None = None,
+    organization_id: str = "org-synthetic",
+) -> None:
+    headers = {"X-API-Key": api_key} if api_key is not None else {}
+    statistical_payload = _statistical_payload()
+    statistical_payload["organization_id"] = organization_id
+    legacy_payload = _payload()
+    legacy_payload["tenant_id"] = organization_id
+
+    live_response = client.get("/health/live")
+    stable_readiness = client.get("/health/ready")
+    capabilities_response = client.get("/v1/capabilities", headers=headers)
+    statistical_response = client.post(
+        "/v1/pricing/recommendations",
+        json=statistical_payload,
+        headers=headers,
+    )
+    experimental_readiness = client.get(
+        "/health/ready",
+        params={"profile": "PERFORMANCE_AWARE_EXPERIMENTAL"},
+    )
+    legacy_response = client.post(
+        "/v1/pricing/recommendations",
+        json=legacy_payload,
+        headers=headers,
+    )
+
+    assert live_response.status_code == 200
+    assert stable_readiness.status_code == 200
+    assert capabilities_response.status_code == 200
+    assert statistical_response.status_code == 200, statistical_response.text
+    assert statistical_response.json()["engine_profile"] == ("MARKET_EVIDENCE_STATISTICAL_V1")
+    assert experimental_readiness.status_code == 503
+    assert legacy_response.status_code == 503
+    assert legacy_response.json() == {
+        "error": "ModelUnavailableError",
+        "detail": "Pricing model is temporarily unavailable.",
+    }
+
+
 def test_recommendation_contract_requires_auth_and_returns_explanation(training_outcome) -> None:
     settings = Settings(
         environment="test",
@@ -60,6 +118,7 @@ def test_recommendation_contract_requires_auth_and_returns_explanation(training_
             headers={"X-API-Key": "test-key", "X-Request-ID": "request-123"},
         )
 
+    assert container.experimental_profile_state is ExperimentalProfileState.READY
     assert unauthorized.status_code == 401
     assert response.status_code == 200, response.text
     body = response.json()
@@ -73,7 +132,8 @@ def test_recommendation_contract_requires_auth_and_returns_explanation(training_
 
 def test_readiness_reports_stable_profile_without_an_approved_model() -> None:
     settings = Settings(environment="test")
-    with TestClient(create_app(settings)) as client:
+    container = ApplicationContainer(settings)
+    with TestClient(create_app(settings, container=container)) as client:
         live_response = client.get("/health/live")
         response = client.get("/health/ready")
         experimental_response = client.get(
@@ -101,6 +161,10 @@ def test_readiness_reports_stable_profile_without_an_approved_model() -> None:
     assert experimental_response.status_code == 503
     assert recommendation_response.status_code == 503
     assert validation_response.status_code == 422
+    assert container.experimental_profile_state is ExperimentalProfileState.NOT_CONFIGURED
+    assert container.experimental_failure_code is None
+    assert container.model_loaded is False
+    assert container.model_version is None
 
 
 def test_production_settings_fail_closed_and_blank_local_key_is_unconfigured() -> None:
@@ -342,11 +406,11 @@ def test_unexpected_errors_use_safe_stable_envelope(training_outcome) -> None:
         def execute(self, context):
             raise RuntimeError("secret internal details")
 
-    container.__dict__["_service"] = BrokenService()
     with TestClient(
         create_app(settings, container=container),
         raise_server_exceptions=False,
     ) as client:
+        container.__dict__["_service"] = BrokenService()
         response = client.post(
             "/v1/pricing/recommendations",
             json=_payload(),
@@ -394,9 +458,13 @@ def test_recommendation_rejects_currency_mismatch(training_outcome) -> None:
 def test_container_rejects_stale_feature_contract(training_outcome) -> None:
     stale_predictor = copy(training_outcome.model)
     stale_predictor.feature_names = ("stale_feature",)
+    container = ApplicationContainer(
+        Settings(environment="test"),
+        predictor=stale_predictor,
+    )
 
     with pytest.raises(ModelUnavailableError, match="incompatible feature contract"):
-        ApplicationContainer(Settings(environment="test"), predictor=stale_predictor)
+        container.load_configured_model()
 
 
 def test_container_fails_readiness_when_required_shap_warmup_fails(training_outcome) -> None:
@@ -407,6 +475,205 @@ def test_container_fails_readiness_when_required_shap_warmup_fails(training_outc
             raise RuntimeError("simulated SHAP native failure")
 
     broken_predictor.__dict__["_shap_explainer"] = BrokenExplainer()
+    container = ApplicationContainer(
+        Settings(environment="test"),
+        predictor=broken_predictor,
+    )
 
     with pytest.raises(ModelUnavailableError, match="warm-up"):
-        ApplicationContainer(Settings(environment="test"), predictor=broken_predictor)
+        container.load_configured_model()
+
+
+def test_production_loader_failure_preserves_stable_profile_and_logs_safely(
+    monkeypatch,
+) -> None:
+    model_uri = "models:/private-artifact-path@champion"
+    sensitive_failure = "provider said credential-marker for a private artifact"
+    tenant_id = "org-synthetic"
+    settings = Settings(
+        environment="production",
+        api_key=SecretStr(PRODUCTION_API_KEY),
+        api_key_tenant_id=tenant_id,
+        serving_tenant_id=tenant_id,
+        trusted_hosts=["testserver"],
+        model_uri=model_uri,
+        mlflow_tracking_uri="https://private.example.invalid/artifacts",
+    )
+    container = ApplicationContainer(settings)
+
+    def fail_to_load(_: MLflowModelRegistry, configured_uri: str) -> None:
+        assert configured_uri == model_uri
+        raise RuntimeError(sensitive_failure)
+
+    class RecordingLogger:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def warning(self, event: str, **context: object) -> None:
+            self.events.append((event, context))
+
+    recording_logger = RecordingLogger()
+    monkeypatch.setattr(MLflowModelRegistry, "load", fail_to_load)
+    monkeypatch.setattr(container_module, "logger", recording_logger)
+
+    with TestClient(create_app(settings, container=container)) as client:
+        _assert_experimental_failure_is_isolated(
+            client,
+            api_key=PRODUCTION_API_KEY,
+            organization_id=tenant_id,
+        )
+
+    assert container.experimental_profile_state is ExperimentalProfileState.UNAVAILABLE
+    assert container.experimental_failure_code is ExperimentalProfileFailureCode.MODEL_LOAD_FAILED
+    assert container.model_loaded is False
+    assert container.model_version is None
+    assert recording_logger.events == [
+        (
+            "experimental_profile_initialization_failed",
+            {
+                "state": ExperimentalProfileState.UNAVAILABLE.value,
+                "code": ExperimentalProfileFailureCode.MODEL_LOAD_FAILED.value,
+                "failure_type": "RuntimeError",
+            },
+        )
+    ]
+    rendered_events = repr(recording_logger.events)
+    for sensitive_value in (
+        model_uri,
+        sensitive_failure,
+        tenant_id,
+        PRODUCTION_API_KEY,
+        "private-artifact-path",
+    ):
+        assert sensitive_value not in rendered_events
+
+
+@pytest.mark.parametrize("failure_stage", ["contract", "warmup"])
+def test_optional_artifact_validation_failures_leave_only_stable_profile_available(
+    training_outcome,
+    monkeypatch,
+    failure_stage: str,
+) -> None:
+    predictor = copy(training_outcome.model)
+    if failure_stage == "contract":
+        predictor.feature_names = ("stale_feature",)
+    else:
+
+        class BrokenExplainer:
+            def shap_values(self, features):
+                raise RuntimeError("simulated optional SHAP failure")
+
+        predictor.__dict__["_shap_explainer"] = BrokenExplainer()
+
+    settings = Settings(
+        environment="test",
+        model_uri="models:/synthetic-optional-model@champion",
+    )
+    container = ApplicationContainer(settings)
+    monkeypatch.setattr(container, "_load_configured_predictor", lambda _: predictor)
+
+    with TestClient(create_app(settings, container=container)) as client:
+        _assert_experimental_failure_is_isolated(client)
+
+    assert container.experimental_profile_state is ExperimentalProfileState.UNAVAILABLE
+    assert container.experimental_failure_code is ExperimentalProfileFailureCode.MODEL_LOAD_FAILED
+    assert container.model_loaded is False
+    assert container.model_version is None
+    with pytest.raises(ModelUnavailableError):
+        _ = container.recommendation_service
+
+
+def test_optional_service_construction_failure_publishes_no_partial_model(
+    training_outcome,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        environment="test",
+        model_uri="models:/synthetic-optional-model@champion",
+    )
+    container = ApplicationContainer(settings)
+    monkeypatch.setattr(
+        container,
+        "_load_configured_predictor",
+        lambda _: training_outcome.model,
+    )
+
+    def fail_service_construction(predictor) -> None:
+        assert predictor is training_outcome.model
+        raise RuntimeError("simulated service construction failure")
+
+    monkeypatch.setattr(container, "_build_service", fail_service_construction)
+
+    with TestClient(create_app(settings, container=container)) as client:
+        _assert_experimental_failure_is_isolated(client)
+
+    assert container.experimental_profile_state is ExperimentalProfileState.UNAVAILABLE
+    assert container.experimental_failure_code is ExperimentalProfileFailureCode.MODEL_LOAD_FAILED
+    assert container.model_loaded is False
+    assert container.model_version is None
+    assert container.__dict__["_predictor"] is None
+    assert container.__dict__["_service"] is None
+
+
+def test_valid_configured_model_is_published_ready_after_optional_initialization(
+    training_outcome,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        environment="test",
+        model_uri="models:/synthetic-optional-model@champion",
+    )
+    container = ApplicationContainer(settings)
+    monkeypatch.setattr(
+        container,
+        "_load_configured_predictor",
+        lambda _: training_outcome.model,
+    )
+
+    with TestClient(create_app(settings, container=container)) as client:
+        stable_readiness = client.get("/health/ready")
+        experimental_readiness = client.get(
+            "/health/ready",
+            params={"profile": "PERFORMANCE_AWARE_EXPERIMENTAL"},
+        )
+        recommendation_response = client.post(
+            "/v1/pricing/recommendations",
+            json=_payload(),
+        )
+        statistical_response = client.post(
+            "/v1/pricing/recommendations",
+            json=_statistical_payload(),
+        )
+
+    assert stable_readiness.status_code == 200
+    assert experimental_readiness.status_code == 200
+    assert recommendation_response.status_code == 200, recommendation_response.text
+    assert statistical_response.status_code == 200, statistical_response.text
+    assert statistical_response.json()["engine_profile"] == "MARKET_EVIDENCE_STATISTICAL_V1"
+    assert container.experimental_profile_state is ExperimentalProfileState.READY
+    assert container.experimental_failure_code is None
+    assert container.model_loaded is True
+    assert container.model_version == training_outcome.model.version
+
+
+def test_strict_configured_model_loader_rethrows_and_clears_partial_state(
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        environment="test",
+        model_uri="models:/synthetic-optional-model@champion",
+    )
+    container = ApplicationContainer(settings)
+
+    def fail_to_load(_: str) -> None:
+        raise RuntimeError("strict loader failure")
+
+    monkeypatch.setattr(container, "_load_configured_predictor", fail_to_load)
+
+    with pytest.raises(RuntimeError, match="strict loader failure"):
+        container.load_configured_model()
+
+    assert container.experimental_profile_state is ExperimentalProfileState.UNAVAILABLE
+    assert container.experimental_failure_code is ExperimentalProfileFailureCode.MODEL_LOAD_FAILED
+    assert container.model_loaded is False
+    assert container.model_version is None

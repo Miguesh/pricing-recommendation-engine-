@@ -86,17 +86,26 @@ def _write_frame(frame: pd.DataFrame, path: Path) -> None:
 
 
 def _read_statistical_request(path: Path) -> StatisticalPricingRequest:
-    if not path.is_file():
-        raise typer.BadParameter("Input file does not exist.")
-    if path.stat().st_size > MAX_STATISTICAL_REQUEST_BYTES:
+    try:
+        if not path.is_file():
+            raise typer.BadParameter("Input file does not exist.")
+        with path.open("rb") as stream:
+            raw_document = stream.read(MAX_STATISTICAL_REQUEST_BYTES + 1)
+    except OSError:
+        raise typer.BadParameter("Input is not a valid statistical contract v1 document.") from None
+    if len(raw_document) > MAX_STATISTICAL_REQUEST_BYTES:
         raise typer.BadParameter(f"Input exceeds the {MAX_STATISTICAL_REQUEST_BYTES:,}-byte limit.")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        document = raw_document.decode("utf-8", errors="strict")
+        payload = json.loads(document)
+    except (UnicodeError, ValueError, RecursionError):
+        # JSONDecodeError is a ValueError; CPython also uses ValueError for its
+        # integer-digit guard and RecursionError for adversarial nesting.
+        raise typer.BadParameter("Input is not a valid statistical contract v1 document.") from None
+    try:
         return StatisticalPricingRequest.model_validate(payload)
-    except (OSError, json.JSONDecodeError, ValidationError) as error:
-        raise typer.BadParameter(
-            "Input is not a valid statistical contract v1 document."
-        ) from error
+    except ValidationError:
+        raise typer.BadParameter("Input is not a valid statistical contract v1 document.") from None
 
 
 @app.command("capabilities")

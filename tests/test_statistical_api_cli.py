@@ -20,15 +20,44 @@ from pricing_engine.domain.statistical import (
     MAX_COMPARABLES,
     MAX_STATISTICAL_IDENTITY_LENGTH,
     MAX_STATISTICAL_REQUEST_BYTES,
+    STATISTICAL_IDENTIFIER_PATTERN,
     EngineProfile,
     StatisticalPricingRequest,
 )
 from pricing_engine.interfaces.api.app import create_app
+from pricing_engine.interfaces.api.schemas import PricingRecommendationRequest
 
 FIXTURE_PATH = (
     Path(__file__).parent / "fixtures" / "statistical" / "plusbnb-consumer.synthetic.json"
 )
 runner = CliRunner()
+
+GENERIC_CLI_INPUT_ERROR = "Input is not a valid statistical contract v1 document."
+VALID_STATISTICAL_IDENTITIES = (
+    "A",
+    "acme",
+    "acme-tenant",
+    "acme_tenant",
+    "acme.tenant",
+    "acme:tenant",
+    "A" + ("x" * (MAX_STATISTICAL_IDENTITY_LENGTH - 1)),
+)
+INVALID_STATISTICAL_IDENTITIES = (
+    "",
+    "   ",
+    "-tenant",
+    "_tenant",
+    ".tenant",
+    ":tenant",
+    "tenant space",
+    "tenant\tspoof",
+    "tenant\nspoof",
+    "tenant/child",
+    "tenant\\child",
+    "tenant@provider",
+    "tenant-é",
+    "o" * (MAX_STATISTICAL_IDENTITY_LENGTH + 1),
+)
 
 
 def _payload() -> dict[str, object]:
@@ -225,6 +254,143 @@ def test_statistical_capabilities_match_required_and_optional_json_schema_paths(
     assert set(stable.optional_fields) == optional_paths
 
 
+@pytest.mark.parametrize("field", ["api_key_tenant_id", "serving_tenant_id"])
+@pytest.mark.parametrize("identity", VALID_STATISTICAL_IDENTITIES)
+def test_configured_security_identities_accept_the_statistical_identifier_grammar(
+    field: str,
+    identity: str,
+) -> None:
+    settings = Settings(
+        environment="test",
+        api_key=SecretStr("k" * 32),
+        **{field: identity},
+    )
+
+    assert getattr(settings, field) == identity
+
+
+@pytest.mark.parametrize("field", ["api_key_tenant_id", "serving_tenant_id"])
+@pytest.mark.parametrize("identity", INVALID_STATISTICAL_IDENTITIES)
+def test_configured_security_identities_reject_values_outside_the_shared_grammar(
+    field: str,
+    identity: str,
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        Settings(
+            environment="test",
+            api_key=SecretStr("k" * 32),
+            **{field: identity},
+        )
+
+
+@pytest.mark.parametrize("field", ["api_key_tenant_id", "serving_tenant_id"])
+def test_configured_security_identity_errors_redact_the_rejected_value(field: str) -> None:
+    private_invalid_identity = "private-tenant/marker-must-not-be-disclosed"
+
+    with pytest.raises(ValidationError) as error_info:
+        Settings(
+            environment="test",
+            api_key=SecretStr("k" * 32),
+            **{field: private_invalid_identity},
+        )
+
+    assert private_invalid_identity not in str(error_info.value)
+    assert private_invalid_identity not in repr(error_info.value)
+
+
+@pytest.mark.parametrize("field", ["api_key_tenant_id", "serving_tenant_id"])
+@pytest.mark.parametrize("identity", [123, b"acme", bytearray(b"acme")])
+def test_configured_security_identities_require_strings(
+    field: str,
+    identity: object,
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        Settings(
+            environment="test",
+            api_key=SecretStr("k" * 32),
+            **{field: identity},
+        )
+
+
+@pytest.mark.parametrize("field", ["api_key_tenant_id", "serving_tenant_id"])
+def test_configured_security_identities_strip_only_outer_padding(field: str) -> None:
+    settings = Settings(
+        environment="test",
+        api_key=SecretStr("k" * 32),
+        **{field: "  tenant-1  "},
+    )
+
+    assert getattr(settings, field) == "tenant-1"
+
+
+@pytest.mark.parametrize("identity", VALID_STATISTICAL_IDENTITIES)
+def test_trusted_proxy_accepts_the_statistical_identifier_grammar(identity: str) -> None:
+    api_key = "k" * 32
+    payload = _payload()
+    payload["organization_id"] = identity
+    settings = Settings(
+        environment="test",
+        api_key=SecretStr(api_key),
+        serving_tenant_id=identity,
+        trust_proxy_identity=True,
+        trusted_tenant_header="X-Authenticated-Tenant",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/v1/pricing/recommendations",
+            json=payload,
+            headers={
+                "X-API-Key": api_key,
+                "X-Authenticated-Tenant": f"  {identity}  ",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["engine_profile"] == "MARKET_EVIDENCE_STATISTICAL_V1"
+
+
+@pytest.mark.parametrize("identity", INVALID_STATISTICAL_IDENTITIES)
+def test_trusted_proxy_rejects_invalid_identities_without_response_or_log_disclosure(
+    identity: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_key = "k" * 32
+    log_events: list[tuple[str, dict[str, object]]] = []
+
+    class RecordingLogger:
+        def info(self, event: str, **context: object) -> None:
+            log_events.append((event, context))
+
+    monkeypatch.setattr(api_app_module, "logger", RecordingLogger())
+    settings = Settings(
+        environment="test",
+        api_key=SecretStr(api_key),
+        serving_tenant_id="organization-synthetic",
+        trust_proxy_identity=True,
+        trusted_tenant_header="X-Authenticated-Tenant",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/v1/pricing/recommendations",
+            json=_payload(),
+            headers=[
+                (b"X-API-Key", api_key.encode("ascii")),
+                (b"X-Authenticated-Tenant", identity.encode("latin-1")),
+            ],
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "error": "HTTPException",
+        "detail": "Trusted tenant identity is invalid.",
+    }
+    assert response.headers["WWW-Authenticate"] == "ApiKey"
+    if identity.strip():
+        assert identity not in response.text
+        assert identity not in repr(log_events)
+
+
 @pytest.mark.parametrize("identity_length", [101, MAX_STATISTICAL_IDENTITY_LENGTH])
 @pytest.mark.parametrize("identity_mode", ["api_key", "trusted_proxy"])
 def test_statistical_identity_up_to_128_is_contract_valid_and_authorized_fail_closed(
@@ -312,6 +478,35 @@ def test_trusted_tenant_header_name_limit_remains_100_characters() -> None:
     assert settings.trusted_tenant_header == header_name
     with pytest.raises(ValidationError, match="trusted_tenant_header"):
         Settings(trusted_tenant_header="X" * 101)
+
+
+def test_legacy_request_identifiers_keep_their_independent_wire_grammar() -> None:
+    payload = {
+        "tenant_id": "legacy tenant/with space",
+        "property_id": "legacy property/with space",
+        "stay_date": "2026-07-24",
+        "as_of_date": "2026-07-14",
+        "currency": "USD",
+        "current_price": "125.00",
+        "historical_occupancy_7d": 0.72,
+        "booking_pace_7d": 0.35,
+        "competitor_price_median": "130.00",
+        "bedrooms": 2,
+        "accommodates": 4,
+        "review_score": 4.7,
+        "constraints": {
+            "min_price": "90.00",
+            "max_price": "170.00",
+            "price_increment": "5.00",
+            "max_price_change_pct": "0.20",
+            "min_expected_occupancy": 0.20,
+        },
+    }
+
+    request = PricingRecommendationRequest.model_validate(payload)
+
+    assert request.tenant_id == "legacy tenant/with space"
+    assert request.property_id == "legacy property/with space"
 
 
 def test_trusted_proxy_rejects_129_character_identity_without_disclosure(
@@ -487,10 +682,15 @@ def test_openapi_exposes_capabilities_and_both_pricing_contracts() -> None:
     statistical_request = schema["components"]["schemas"]["StatisticalPricingRequest"]
     legacy_request = schema["components"]["schemas"]["PricingRecommendationRequest"]
     assert statistical_request["properties"]["organization_id"]["maxLength"] == 128
+    assert statistical_request["properties"]["organization_id"]["pattern"] == (
+        STATISTICAL_IDENTIFIER_PATTERN
+    )
     assert statistical_request["properties"]["comparables"]["maxItems"] == MAX_COMPARABLES
     assert statistical_request["properties"]["input_lineage"]["maxItems"] == MAX_COMPARABLES
     assert legacy_request["properties"]["tenant_id"]["maxLength"] == 100
     assert legacy_request["properties"]["property_id"]["maxLength"] == 100
+    assert "pattern" not in legacy_request["properties"]["tenant_id"]
+    assert "pattern" not in legacy_request["properties"]["property_id"]
     assert recommendation["responses"]["413"]["description"] == "Content Too Large"
     assert recommendation["responses"]["422"]["description"] == "Unprocessable Content"
 
@@ -569,18 +769,194 @@ def test_cli_contract_failure_is_typed_and_does_not_echo_payload(tmp_path: Path)
     assert "property-synthetic-001" not in result.output
 
 
-def test_cli_rejects_oversized_input_without_echoing_content(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_rejects_invalid_utf8_with_a_generic_redacted_error(
+    command: str,
+    tmp_path: Path,
+) -> None:
+    private_marker = b"private-invalid-utf8-marker"
+    invalid_path = tmp_path / "invalid-utf8.synthetic.json"
+    invalid_path.write_bytes(b'{"request_id":"' + private_marker + b'\xff"}')
+
+    result = runner.invoke(cli.app, [command, "--input", str(invalid_path)])
+
+    assert result.exit_code == 2
+    assert GENERIC_CLI_INPUT_ERROR in result.output
+    assert private_marker.decode("ascii") not in result.output
+    assert "UnicodeDecodeError" not in result.output
+    assert "Traceback" not in result.output
+    assert r"\xff" not in result.output
+    assert "0xff" not in result.output
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_rejects_malformed_json_with_a_generic_redacted_error(
+    command: str,
+    tmp_path: Path,
+) -> None:
+    private_marker = "private-malformed-json-marker"
+    invalid_path = tmp_path / "malformed.synthetic.json"
+    invalid_path.write_text(
+        '{"private":"' + private_marker + '","truncated":',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli.app, [command, "--input", str(invalid_path)])
+
+    assert result.exit_code == 2
+    assert GENERIC_CLI_INPUT_ERROR in result.output
+    assert private_marker not in result.output
+    assert "JSONDecodeError" not in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+@pytest.mark.parametrize(
+    ("document", "internal_error_name"),
+    [
+        (b'{"private":' + (b"9" * 5_000) + b"}", "ValueError"),
+        ((b"[" * 5_000) + b"0" + (b"]" * 5_000), "RecursionError"),
+    ],
+)
+def test_cli_redacts_json_parser_resource_guard_errors(
+    command: str,
+    document: bytes,
+    internal_error_name: str,
+    tmp_path: Path,
+) -> None:
+    invalid_path = tmp_path / "parser-guard.synthetic.json"
+    invalid_path.write_bytes(document)
+
+    result = runner.invoke(cli.app, [command, "--input", str(invalid_path)])
+
+    assert result.exit_code == 2
+    assert GENERIC_CLI_INPUT_ERROR in result.output
+    assert internal_error_name not in result.output
+    assert "Traceback" not in result.output
+    assert len(document) < MAX_STATISTICAL_REQUEST_BYTES
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_rejects_pydantic_invalid_json_with_a_generic_redacted_error(
+    command: str,
+    tmp_path: Path,
+) -> None:
+    private_marker = "private schema marker must not be echoed"
+    payload = _payload()
+    payload["request_id"] = private_marker
+    invalid_path = tmp_path / "schema-invalid.synthetic.json"
+    invalid_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = runner.invoke(cli.app, [command, "--input", str(invalid_path)])
+
+    assert result.exit_code == 2
+    assert GENERIC_CLI_INPUT_ERROR in result.output
+    assert private_marker not in result.output
+    assert "ValidationError" not in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_rejects_oversized_input_before_decoding_without_echoing_content(
+    command: str,
+    tmp_path: Path,
+) -> None:
     private_marker = b"private-marker-must-not-be-echoed"
     oversized_path = tmp_path / "oversized.synthetic.json"
     oversized_path.write_bytes(
-        private_marker + (b"x" * (MAX_STATISTICAL_REQUEST_BYTES + 1 - len(private_marker)))
+        private_marker
+        + b"\xff"
+        + (b"x" * (MAX_STATISTICAL_REQUEST_BYTES + 1 - len(private_marker)))
     )
 
-    result = runner.invoke(cli.app, ["validate", "--input", str(oversized_path)])
+    result = runner.invoke(cli.app, [command, "--input", str(oversized_path)])
 
     assert result.exit_code == 2
     assert f"{MAX_STATISTICAL_REQUEST_BYTES:,}-byte limit" in result.output
     assert private_marker.decode("ascii") not in result.output
+    assert GENERIC_CLI_INPUT_ERROR not in result.output
+    assert "UnicodeDecodeError" not in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_redacts_file_open_failures(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    private_error_marker = "private-open-error-must-not-be-disclosed"
+    unreadable_path = tmp_path / "unreadable.synthetic.json"
+    unreadable_path.write_text("{}", encoding="utf-8")
+
+    def fail_target_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        assert path == unreadable_path
+        raise PermissionError(private_error_marker)
+
+    monkeypatch.setattr(Path, "open", fail_target_open)
+
+    result = runner.invoke(cli.app, [command, "--input", str(unreadable_path)])
+
+    assert result.exit_code == 2
+    assert GENERIC_CLI_INPUT_ERROR in result.output
+    assert private_error_marker not in result.output
+    assert str(unreadable_path) not in result.output
+    assert "PermissionError" not in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("command", ["validate", "recommend"])
+def test_cli_reads_at_most_one_byte_beyond_the_contract_limit(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    bounded_path = tmp_path / "growing.synthetic.json"
+    bounded_path.write_bytes(b"{}")
+    requested_sizes: list[int] = []
+    returned_sizes: list[int] = []
+    available_sizes: list[int] = []
+    opened_modes: list[str] = []
+
+    class GrowingReader:
+        def __enter__(self) -> GrowingReader:
+            return self
+
+        def __exit__(
+            self,
+            exception_type: object,
+            exception: object,
+            traceback: object,
+        ) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            available_size = MAX_STATISTICAL_REQUEST_BYTES + 257
+            requested_sizes.append(size)
+            available_sizes.append(available_size)
+            returned_size = min(size, available_size)
+            returned_sizes.append(returned_size)
+            return b"x" * returned_size
+
+    original_open = Path.open
+
+    def open_target(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if path == bounded_path:
+            opened_modes.append(mode)
+            return GrowingReader()
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_target)
+
+    result = runner.invoke(cli.app, [command, "--input", str(bounded_path)])
+
+    assert result.exit_code == 2
+    assert f"{MAX_STATISTICAL_REQUEST_BYTES:,}-byte limit" in result.output
+    assert requested_sizes == [MAX_STATISTICAL_REQUEST_BYTES + 1]
+    assert returned_sizes == [MAX_STATISTICAL_REQUEST_BYTES + 1]
+    assert available_sizes == [MAX_STATISTICAL_REQUEST_BYTES + 257]
+    assert available_sizes[0] > returned_sizes[0]
+    assert opened_modes == ["rb"]
 
 
 def test_openapi_export_ignores_pricing_environment_overrides(

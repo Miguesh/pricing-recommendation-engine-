@@ -153,6 +153,9 @@ analytical batch. It accepts at most 50 comparables and 50 matching lineage
 entries, and its compact UTF-8 body must not exceed 1,048,576 bytes in either
 the HTTP or CLI transport. `capabilities` reports those contractual maxima and,
 for HTTP, any explicitly lower operational body limit.
+The CLI opens the input as binary, reads at most 1,048,577 bytes, enforces the
+size limit before strict UTF-8 decoding, and returns one redacted validation
+error for invalid encoding, JSON, schema content, or file reads.
 For the stable profile, `required_fields` is a complete recursive inventory of
 required envelope, target-feature, comparable, and lineage paths. Contract
 tests derive that inventory from the Pydantic JSON Schema so a newly required
@@ -183,6 +186,12 @@ without a model. Use
 `/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL` when model readiness is
 required; it returns 503 until an artifact is loaded. Discover exact contract
 requirements at `/v1/capabilities`.
+
+An ordinary failure while the optional experimental artifact is loaded,
+validated, warmed, or attached to its service leaves the process and stable
+profile operational. The experimental profile remains unavailable and its
+explicit readiness and recommendation paths fail closed with 503; requests are
+never rerouted to the stable profile.
 
 See the [contract](docs/contracts/PRICING_CONTRACT_V1.md),
 [weighted algorithm](docs/algorithms/WEIGHTED_PERCENTILE_V1.md), and
@@ -226,9 +235,10 @@ fallback crosses profiles.
 
 If `PRICING_API_KEY` is configured, send `X-API-Key`; when identity binding is
 configured, statistical `organization_id` must match it. Statistical
-organization identity is bounded to 128 characters across the public contract,
-API-key binding, serving-tenant binding, and trusted-proxy value. The retained
-experimental request keeps its separate 100-character `tenant_id` limit.
+organization identity is trimmed at the boundary, must be 1-128 characters, and
+must match `^[A-Za-z0-9][A-Za-z0-9._:-]*$` across the public contract, API-key
+binding, serving-tenant binding, and trusted-proxy value. The retained
+experimental request keeps its separate 100-character `tenant_id` wire limit.
 
 The following legacy example illustrates the preserved model-backed API:
 

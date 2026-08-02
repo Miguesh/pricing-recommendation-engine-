@@ -28,6 +28,7 @@ ENGINE_VERSION = "0.1.0"
 MAX_COMPARABLES = 50
 MAX_STATISTICAL_IDENTITY_LENGTH = 128
 MAX_STATISTICAL_REQUEST_BYTES = 1_048_576
+STATISTICAL_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
 
 Identifier = Annotated[
     str,
@@ -35,7 +36,7 @@ Identifier = Annotated[
         strip_whitespace=True,
         min_length=1,
         max_length=MAX_STATISTICAL_IDENTITY_LENGTH,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        pattern=STATISTICAL_IDENTIFIER_PATTERN,
     ),
 ]
 VersionIdentifier = Annotated[

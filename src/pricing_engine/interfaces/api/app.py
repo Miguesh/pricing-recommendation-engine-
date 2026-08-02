@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from hashlib import sha256
@@ -31,6 +32,7 @@ from pricing_engine.domain.exceptions import (
 )
 from pricing_engine.domain.statistical import (
     MAX_STATISTICAL_IDENTITY_LENGTH,
+    STATISTICAL_IDENTIFIER_PATTERN,
     CapabilitiesResponse,
     EngineProfile,
     StatisticalPricingRequest,
@@ -220,7 +222,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        resolved_container.load_configured_model()
+        resolved_container.initialize_optional_experimental_profile()
         yield
 
     app = FastAPI(
@@ -421,14 +423,18 @@ def create_app(
                 detail="Tenant identity configuration is invalid.",
             )
         supplied_tenant = request.headers.get(header_name)
-        if supplied_tenant is None or not supplied_tenant.strip():
+        if supplied_tenant is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Trusted tenant identity is required.",
                 headers={"WWW-Authenticate": "ApiKey"},
             )
         normalized_tenant = supplied_tenant.strip()
-        if len(normalized_tenant) > MAX_STATISTICAL_IDENTITY_LENGTH:
+        if (
+            not normalized_tenant
+            or len(normalized_tenant) > MAX_STATISTICAL_IDENTITY_LENGTH
+            or re.fullmatch(STATISTICAL_IDENTIFIER_PATTERN, normalized_tenant) is None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Trusted tenant identity is invalid.",

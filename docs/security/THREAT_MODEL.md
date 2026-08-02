@@ -59,7 +59,7 @@ deployment principal.
 
 | Threat | Current control | Residual risk / owner |
 | --- | --- | --- |
-| Cross-organization request | Optional API key plus configured key/tenant or trusted-gateway binding; statistical `organization_id` and both binding modes share an explicit 128-character maximum and fail closed on mismatch/overflow | Local auth is not enterprise IAM; deployment must supply TLS, key rotation, gateway identity, and authorization; legacy request IDs retain their separate 100-character contract |
+| Cross-organization request | Optional API key plus configured key/tenant or trusted-gateway binding; after outer-whitespace trimming, statistical identities and all statistical tenant bindings share the exact 1-128 character grammar `^[A-Za-z0-9][A-Za-z0-9._:-]*$` and fail closed on invalid input or mismatch | Local auth is not enterprise IAM; deployment must supply TLS, key rotation, gateway identity, and authorization; legacy request IDs retain their separate 100-character wire contract |
 | PII/private URL exfiltration | Strict bounded fields; documentation prohibits sensitive content; logs omit full payloads | Opaque strings cannot prove content is non-sensitive; PLUSBNB must minimize and scan before sending |
 | Currency mixing | Uppercase currency schema and exact per-comparable equality; no FX code path | Three-letter format is not a full ISO registry; consumer owns code validity and prior normalization |
 | Temporal leakage | Offset-aware timestamps and `observed_at`/`known_at <= as_of`; exact scenario checks | Consumer controls truthfulness and point-in-time queries; numeric offsets are not cross-checked against the declared IANA zone |
@@ -69,10 +69,10 @@ deployment principal.
 | Duplicate/replay | Duplicate comparable IDs rejected; deterministic request/run hashes | Requests are not persisted or nonce-checked; consumer owns idempotency and replay controls |
 | Schema smuggling | Pydantic strict objects reject unknown fields; bounded strings/collections; capabilities required/optional paths are recursively checked against validation JSON Schema; no `eval` or dynamic imports | Union request evolution must be reviewed for ambiguous parsing |
 | Binary-float money/non-finite values | Money accepted only as decimal strings and stored/calculated with `Decimal` | Downstream systems can reintroduce float error; consumer must preserve string/decimal semantics |
-| Payload/compute exhaustion | Shared HTTP/CLI maximum 1,048,576 bytes; API may be configured lower and reports the effective limit; max 50 comparables and 50 lineage entries per single-decision request; read deadline, bulkhead, soft execution timeout | Per-process controls are not distributed rate limits; a lower operational limit can reject a larger contract-valid document; timed-out native work may continue until completion |
-| Error data leakage | Validation errors keep only type/location/message; internal errors are generic; full payloads are not logged | Human-readable contract details and identifiers still require log access control and retention |
+| Payload/compute exhaustion | Shared HTTP/CLI maximum 1,048,576 bytes; CLI reads only the maximum plus one byte in binary mode and checks size before decode; API may be configured lower and reports the effective limit; max 50 comparables and 50 lineage entries per single-decision request; read deadline, bulkhead, soft execution timeout | Per-process controls are not distributed rate limits; a lower operational limit can reject a larger contract-valid document; timed-out native work may continue until completion |
+| Error data leakage | Validation errors keep only type/location/message; CLI invalid UTF-8, JSON, schema, and read failures use one redacted error; internal errors are generic; full payloads are not logged | Human-readable contract details and identifiers still require log access control and retention |
 | Network/provider access | Stable core has no I/O and tests execute without live services | Process-level egress is not denied by the Python type system; deployment should apply network policy |
-| Artifact code execution | Stable profile loads no artifacts; experimental lifecycle checks checksums and governance metadata before joblib loading | Serialized model loading can execute code; registry write permission remains code-deployment authority |
+| Artifact code execution / initialization failure | Stable profile loads no artifacts; experimental lifecycle checks checksums and governance metadata before joblib loading, publishes predictor/service state atomically after validation and warm-up, and isolates ordinary initialization failure from stable startup | Serialized model loading can execute code; registry write permission remains code-deployment authority; fatal process/runtime failures remain outside this isolation |
 | Unauthorized publication | Contract and response fix `publication_allowed=false` and `commercial_validation=false` | Flags do not technically control a downstream channel; PLUSBNB must separate review from publication |
 | Dependency compromise | Reproducible `uv.lock`, clean build/CI, dependency inventory and scan workflow | Locking does not eliminate compromised upstream packages; update review and image scanning remain required |
 
@@ -83,8 +83,9 @@ body-read deadline is independent from the soft calculation deadline. A
 per-process semaphore limits concurrent recommendation work. The statistical
 calculation is bounded further by at most 50 comparables for one pricing
 decision and has no external waits. The CLI uses the same 1,048,576-byte
-constant. Capabilities exposes the contractual maximum and the API's effective
-limit so an operational reduction is observable.
+constant, reads at most one byte beyond it, and strictly decodes UTF-8 only after
+the size check. Capabilities exposes the contractual maximum and the API's
+effective limit so an operational reduction is observable.
 
 Evidence-class thresholds consume raw Decimal metrics; quantized response
 components cannot elevate a class at a boundary.
@@ -94,6 +95,10 @@ as ready even when no experimental model is loaded. Callers that need the model
 must use
 `/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL`, which returns 503 until
 the artifact is loaded, and inspect the reported model fields.
+Failures in experimental loading, validation, warm-up, or service construction
+leave stable startup operational, clear partial experimental state, and keep
+experimental readiness/recommendation at 503. No request crosses profiles as a
+fallback.
 
 The API Docker image runs as a non-root user. Compose drops Linux capabilities,
 uses a read-only filesystem, and provisions bounded writable temporary mounts.
@@ -106,8 +111,9 @@ pricing completion metadata rather than complete request/response payloads.
 Identifiers are still potentially linkable pseudonyms. Logs need access
 control, retention, deletion, and incident procedures.
 
-An overlong trusted identity is rejected with a generic response before tenant
-authorization and is not included in response bodies or application telemetry.
+An invalid or overlong trusted identity is rejected with a generic response
+before tenant authorization and is not included in response bodies or
+application telemetry. Configuration validation also suppresses input values.
 
 Never send or log names, contact information, addresses, precise coordinates,
 listing/calendar/private URLs, credentials, cookies, messages, payment data, or

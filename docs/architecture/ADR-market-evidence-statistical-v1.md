@@ -49,14 +49,17 @@ compatibility across health or profile semantics. The CLI adds `validate`,
 `recommend`, `capabilities`, and `export-openapi` operations for the statistical
 profile. HTTP and CLI share a 1,048,576-byte statistical request maximum. The
 API can be configured lower; capabilities distinguishes that effective limit
-from the contractual maximum.
+from the contractual maximum. The CLI performs a bounded binary read of that
+maximum plus one byte, rejects oversized content before strict UTF-8 decoding,
+and reports invalid encoding, JSON, schema, or reads without echoing input.
 
-The stable `organization_id` boundary is 128 characters. API-key tenant
-binding, serving-tenant routing, and trusted-proxy identity values use that same
-explicit maximum, while the retained experimental request keeps its existing
-100-character tenant/property identifiers. Stable capabilities enumerates all
-required nested contract paths, with a recursive validation-schema test to
-detect metadata drift.
+Stable identifier fields trim surrounding whitespace and use the exact 1-128
+character grammar `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. API-key tenant binding,
+serving-tenant routing, and trusted-proxy identity values use that same grammar,
+while the retained experimental request keeps its existing 100-character
+tenant/property wire identifiers. Stable capabilities enumerates all required
+nested contract paths, with a recursive validation-schema test to detect
+metadata drift.
 
 Evidence quality compares raw Decimal ESS, average similarity, and dispersion.
 Only the response components are quantized. When the initial eligible set is
@@ -69,6 +72,11 @@ explicit
 `/health/ready?profile=PERFORMANCE_AWARE_EXPERIMENTAL` check returns 503 until
 that profile's artifact is loaded. Existing monitors that interpreted the
 default 503 as a missing-model signal must migrate to this explicit query.
+Experimental state is published atomically only after artifact load, contract
+validation, prediction/explanation warm-up, and service construction succeed.
+An ordinary failure leaves stable startup operational, marks the optional
+profile unavailable, and keeps its explicit readiness and recommendation paths
+closed; it never triggers a statistical fallback.
 
 Contract `1.0`, algorithm `weighted-percentile-v1.0.0`, evidence policy
 `evidence-quality-v1.0.0`, outlier policy `weighted-tukey-v1.0.0`, and algorithm

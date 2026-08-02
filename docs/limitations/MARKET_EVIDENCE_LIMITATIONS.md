@@ -105,13 +105,24 @@ ownership. Hashes are not authorization.
   managed identity/secrets, tenant/property authorization, rate limits, and
   governed logging.
 - The stable and experimental profiles share one API process and endpoint.
-  Consumers must select the correct schema and inspect capabilities.
+  Consumers must select the correct schema and inspect capabilities. Ordinary
+  experimental load, validation, warm-up, or service-construction failure is
+  isolated from stable startup, but fatal process/runtime failures are not.
 - One statistical request represents one pricing decision, not a batch. It is
   limited to 50 comparables, 50 matching lineage entries, and 1,048,576 compact
   UTF-8 bytes in both supported transports. An explicitly lower API setting is
   visible in capabilities and can reject a larger contract-valid request.
 - Default statistical readiness does not mean a trained experimental model is
   loaded; model monitoring must use the explicit experimental-profile query.
+  Experimental unavailability returns 503 and never invokes the statistical
+  calculation as a fallback.
+- Statistical identifiers are ASCII-bound after surrounding whitespace is
+  trimmed: 1-128 characters matching
+  `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. This does not widen or redefine the legacy
+  experimental request's 100-character tenant/property wire contract.
+- The CLI size check uses a bounded binary read before strict UTF-8 decoding.
+  Invalid encoding, JSON, schema, and read failures intentionally share a
+  redacted error, which limits diagnostics available to CLI callers.
 - The stable core performs no external access, but process-level egress control
   is a deployment responsibility.
 - A soft HTTP timeout does not guarantee cancellation of synchronous work.

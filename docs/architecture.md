@@ -63,6 +63,10 @@ without any artifact. The experimental service starts only from a portable
 local bundle or a configured MLflow model URI. Dependency direction points
 inward: infrastructure implements application ports, while domain rules remain
 pure.
+Experimental startup is optional for the co-hosted process: its predictor and
+service are published only after load, contract validation, prediction/SHAP
+warm-up, and service construction all succeed. An ordinary failure clears that
+partial state and leaves the stable profile operational.
 The principal ports isolate training-data validation, feature construction,
 model fitting/prediction, candidate registration, and model loading from their
 Pandera, Pandas, LightGBM, filesystem, and MLflow adapters.
@@ -129,8 +133,9 @@ support. It is an operational reliability indicator, not booking probability or
 causal certainty. SHAP explains central demand at the selected price; global
 LightGBM importance gives portfolio-level context. SHAP is a required
 experimental serving capability: startup warms prediction and explanation, and
-the experimental path fails closed if native initialization or explanation
-fails.
+the experimental path fails closed if artifact loading, contract validation,
+native initialization, explanation warm-up, or service construction fails. It
+does not fall back to the stable calculation.
 
 ## Feature and data contract
 
@@ -239,6 +244,16 @@ namespace requires a single serialized promotion/rollback writer.
   `?profile=PERFORMANCE_AWARE_EXPERIMENTAL` readiness check returns 503 until a
   compatible model has loaded and prediction/SHAP warm-up succeeds. Health
   fields report which profile was checked and experimental model availability.
+  Optional-profile initialization internally distinguishes `NOT_CONFIGURED`,
+  `READY`, and `UNAVAILABLE`; no partially initialized predictor or service is
+  exposed.
+- Statistical identifier fields and tenant bindings trim surrounding whitespace
+  and share the 1-128 character grammar
+  `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. The legacy experimental request retains its
+  separate 100-character wire contract.
+- The statistical CLI reads no more than the 1,048,576-byte contract maximum
+  plus one byte in binary mode, rejects oversize input before strict UTF-8
+  decoding, and redacts malformed encoding, JSON, schema, and read errors.
 - Production configuration accepts only a governed
   `models:/<registered-model-name>@champion` URI. Local paths and direct model
   versions remain development/diagnostic options, not production serving

@@ -50,17 +50,29 @@ All notable changes to this project are documented here. The format follows
 - The lock now resolves GitPython 3.1.57 and the development test runner pytest
   9.1.1, clearing the dependency-audit advisories found during final validation.
 - Statistical organization identities up to 128 normalized characters can now
-  pass both API-key and trusted-proxy tenant binding; 129-character
-  configuration/header values fail closed without disclosure, while the legacy
-  request stays at 100.
+  pass API-key, serving-tenant, and trusted-proxy binding only when they match
+  the contract grammar `^[A-Za-z0-9][A-Za-z0-9._:-]*$`; invalid or
+  129-character configuration/header values fail closed without disclosure,
+  while the legacy request stays at 100.
 - Stable-profile capabilities now lists every required nested target-property,
   comparable, and lineage field. A recursive JSON Schema regression detects
   required/optional metadata drift.
+- Optional experimental artifact loading, contract validation, warm-up, and
+  service construction now publish state atomically. Ordinary initialization
+  failures leave the stable profile operational while experimental readiness
+  and recommendation fail closed without cross-profile fallback.
+- Statistical CLI input now uses a bounded binary read of the contract maximum
+  plus one byte, applies the size check before strict UTF-8 decoding, and
+  redacts invalid encoding, JSON, schema, and read errors.
 
 ### Compatibility
 
 - The existing model-backed contract and MLflow lifecycle remain available
   under `PERFORMANCE_AWARE_EXPERIMENTAL`.
+- A legacy deployment that reused a tenant value containing spaces, `/`, `@`,
+  non-ASCII text, or forbidden leading punctuation for statistical security
+  binding must migrate that configuration to an opaque identifier matching the
+  shared grammar. This does not change the legacy request wire schema.
 - The software version remains pre-1.0 (`0.1.0`); only the new integration
   contract is versioned as v1.
 - These boundary corrections precede the contract's first merge, so contract,
