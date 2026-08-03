@@ -1,6 +1,6 @@
 ARG UV_VERSION=0.9.15
 
-FROM python:3.12.13-slim-bookworm AS builder
+FROM python:3.14.6-slim-bookworm AS builder
 
 ARG UV_VERSION
 
@@ -18,7 +18,7 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 
-FROM python:3.12.13-slim-bookworm AS runtime
+FROM python:3.14.6-slim-bookworm AS runtime
 
 ARG UV_VERSION
 
