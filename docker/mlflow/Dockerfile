@@ -1,4 +1,4 @@
-FROM python:3.12.13-slim-bookworm
+FROM python:3.14.7-slim-bookworm
 
 ARG MLFLOW_VERSION=3.14.0
 ARG PSYCOPG2_VERSION=2.9.12
